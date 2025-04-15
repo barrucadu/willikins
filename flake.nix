@@ -17,6 +17,9 @@
           ghc
           hlint
         ];
+        buildInputs = with pkgs; [
+          zlib
+        ];
       };
 
       packages.${system}.default = pkgs.haskellPackages.developPackage {
