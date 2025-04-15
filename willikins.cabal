@@ -1,0 +1,38 @@
+cabal-version:      3.0
+name:               willikins
+version:            0.0.0.0
+synopsis:           Your personal AI butler
+-- description:
+homepage:           https://github.com/barrucadu/willikins
+license:            BSD-3-Clause
+license-file:       LICENSE
+author:             Michael Walker
+maintainer:         mike@barrucadu.co.uk
+-- copyright:
+build-type:         Simple
+-- extra-doc-files:
+-- extra-source-files:
+
+common warnings
+    ghc-options: -Wall
+
+library
+    import:           warnings
+    exposed-modules:  MyLib
+    -- other-modules:
+    -- other-extensions:
+    build-depends:    base ^>=4.18.2.1
+    hs-source-dirs:   lib
+    default-language: Haskell2010
+
+executable willikins
+    import:           warnings
+    main-is:          Main.hs
+    -- other-modules:
+    -- other-extensions:
+    build-depends:
+        base ^>=4.18.2.1,
+        willikins
+
+    hs-source-dirs:   bin
+    default-language: Haskell2010
