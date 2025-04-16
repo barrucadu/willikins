@@ -46,7 +46,8 @@ data Event = Event
   { eTitle :: String
   , eLocation :: Maybe String
   , eStart :: String
-  , eEnd :: Maybe String
+  , eEnd :: String
+  , eAllDay :: Bool
   }
   deriving Show
 
@@ -60,11 +61,13 @@ instance FromJSON Event where
 
     allDayEvent <- startv A..:? "date"
     case allDayEvent of
-      Just date -> pure Event { eTitle = title, eLocation = loc, eStart = date, eEnd = Nothing }
+      Just date -> do
+        end <- endv A..: "date"
+        pure Event { eTitle = title, eLocation = loc, eStart = date, eEnd = end, eAllDay = True }
       Nothing -> do
         start <- startv A..: "dateTime"
         end <- endv A..: "dateTime"
-        pure Event { eTitle = title, eLocation = loc, eStart = start, eEnd = Just end }
+        pure Event { eTitle = title, eLocation = loc, eStart = start, eEnd = end, eAllDay = False }
 
 fetchEvents :: Credentials -> IO [Event]
 fetchEvents credentials = do

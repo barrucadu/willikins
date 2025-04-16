@@ -2,9 +2,10 @@
 
 module Main where
 
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (UTCTime, getCurrentTime, addUTCTime, nominalDay)
 import qualified Data.Time.Format as TF
 import System.IO (getLine, putStrLn)
+import System.Environment (getArgs)
 import System.Exit (exitFailure)
 
 import qualified Willikins.Integration.GoogleCalendar as GCal
@@ -12,11 +13,12 @@ import Willikins.LLM.Client
 
 main :: IO ()
 main = do
-  credentials <- credentialsFromEnvironment
   events <- GCal.fetchEvents =<< GCal.credentialsFromEnvironment
   now <- getCurrentTime
   let sysPrompt = systemPrompt events now
-  chatbot credentials sysPrompt
+  getArgs >>= \case
+    ["debug", "dump-system-prompt"] -> putStrLn sysPrompt
+    _ -> credentialsFromEnvironment >>= \c -> chatbot c sysPrompt
 
 chatbot :: Credentials -> String -> IO ()
 chatbot c sysPrompt = go initialHistory where
@@ -68,12 +70,19 @@ systemPrompt events now = unlines prompt where
 
   showEvent event =
     let
-      timespec = case GCal.eEnd event of
-        Just end -> " from " ++ GCal.eStart event ++ " to " ++ end
-        Nothing -> " all day event on " ++ GCal.eStart event
-      locspec = case GCal.eLocation event of
-        Just loc -> " at " ++ loc
-        Nothing -> ""
+      timespec
+        | GCal.eAllDay event =
+          let
+            -- subtract a day so we have an inclusive range of days
+            endD = TF.parseTimeOrError True TF.defaultTimeLocale "%Y-%m-%d" $ GCal.eEnd event
+            endD' = addUTCTime (negate nominalDay) endD
+            end = TF.formatTime TF.defaultTimeLocale "%Y-%m-%d" endD'
+          in if GCal.eStart event == end
+             then " all day on " ++ GCal.eStart event
+             else " from " ++ GCal.eStart event ++ " to " ++ end ++ " inclusive"
+        | otherwise = " from " ++ GCal.eStart event ++ " to " ++ GCal.eEnd event
+
+      locspec = maybe "" (" at "++) $ GCal.eLocation event
     in "- " ++ GCal.eTitle event ++ timespec ++ locspec
 
   today = TF.formatTime TF.defaultTimeLocale "%A, %Y-%m-%d" now
