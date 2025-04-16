@@ -12,10 +12,11 @@
       formatter.${system} = pkgs.nixpkgs-fmt;
 
       devShells.${system}.default = pkgs.mkShell {
-        packages = with pkgs.haskellPackages; [
-          cabal-install
-          ghc
-          hlint
+        packages = with pkgs; [
+          google-cloud-sdk
+          haskellPackages.cabal-install
+          haskellPackages.ghc
+          haskellPackages.hlint
         ];
         buildInputs = with pkgs; [
           zlib
