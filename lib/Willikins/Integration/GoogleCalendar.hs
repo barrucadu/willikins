@@ -1,4 +1,5 @@
 {-# LANGUAGE OverloadedStrings #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Willikins.Integration.GoogleCalendar
   ( Credentials
@@ -6,13 +7,15 @@ module Willikins.Integration.GoogleCalendar
   , CalendarId(..)
   , Event(..)
   , fetchEvents
+  , formatEventForLLM
   ) where
 
 import Data.Aeson (FromJSON)
 import qualified Data.Aeson as A
 import qualified Data.ByteString as BS
 import Data.String (fromString)
-import Data.Time.Clock (addUTCTime, getCurrentTime, nominalDay)
+import Data.Time.Clock (UTCTime, addUTCTime, getCurrentTime, nominalDay)
+import Data.Time.LocalTime (ZonedTime)
 import qualified Data.Time.Format as TF
 import qualified Network.HTTP.Simple as H
 import System.Environment (getEnv)
@@ -74,7 +77,7 @@ fetchEvents credentials = do
     accessToken <- googleAuthAccessToken credentials
     now <- getCurrentTime
     let req = H.setRequestBearerAuth accessToken . H.setRequestQueryString (query now) $ H.parseRequest_ ("GET " ++ url)
-    elrItems . H.getResponseBody <$> H.httpJSON req
+    filter (not . isBoring) . elrItems . H.getResponseBody <$> H.httpJSON req
   where
     url = "https://www.googleapis.com/calendar/v3/calendars/" ++ crCalendarId credentials ++ "/events"
 
@@ -82,13 +85,36 @@ fetchEvents credentials = do
       [ ("maxResults", Just "1000")
       , ("orderBy", Just "startTime")
       , ("singleEvents", Just "true")
-      , ("timeMin", Just (timeMin now))
+      , ("timeMin", Just (fmt now))
       , ("timeMax", Just (timeMax now))
       ]
 
-    timeMin now = fmt $ addUTCTime (negate $ nominalDay * 30) now
-    timeMax now = fmt $ addUTCTime (nominalDay * 30) now
-    fmt = fromString . TF.formatTime TF.defaultTimeLocale "%Y-%m-%dT00:00:00Z"
+    timeMax now = fmt $ addUTCTime (nominalDay * 14) now
+    fmt = fromString . TF.formatTime TF.defaultTimeLocale "%FT00:00:00Z"
+
+    isBoring e = eTitle e == "Sleep!"
+
+formatEventForLLM :: Event -> String
+formatEventForLLM Event{..} = eTitle ++ " " ++ timespec ++ locationspec where
+  timespec = case (eAllDay, startDate == endDate) of
+    (True, True) -> "all day on " ++ startDate
+    (True, False) -> "from " ++ startDate ++ " to " ++ endDate ++ " inclusive"
+    (False, True) -> "on " ++ startDate ++ " from " ++ startTime ++ " to " ++ endTime
+    (False, False) -> "from " ++ eStart ++ " to " ++ eEnd
+
+  locationspec = maybe "" (" at "++) eLocation
+
+  startDate
+    | eAllDay = toDate (fromDate eStart)
+    | otherwise = toDate (fromDateTime eStart)
+
+  endDate
+    -- subtract a day so we have an inclusive range of days
+    | eAllDay = toDate . addUTCTime (negate nominalDay) $ fromDate eEnd
+    | otherwise = toDate (fromDateTime eEnd)
+
+  startTime = toLocalTimeOfDay (fromDateTime eStart)
+  endTime = toLocalTimeOfDay (fromDateTime eEnd)
 
 -------------------------------------------------------------------------------
 
@@ -100,3 +126,16 @@ googleAuthAccessToken credentials = do
   stdout <- P.readProcess "gcloud" ["auth", "print-access-token", "--scopes=https://www.googleapis.com/auth/calendar.events.readonly"] ""
   let token = head $ lines stdout
   pure (fromString token)
+
+fromDate :: String -> UTCTime
+fromDate = TF.parseTimeOrError True TF.defaultTimeLocale "%F"
+
+fromDateTime :: String -> ZonedTime
+fromDateTime = TF.parseTimeOrError True TF.defaultTimeLocale "%FT%T%Ez"
+
+toDate :: TF.FormatTime t => t -> String
+toDate = TF.formatTime TF.defaultTimeLocale "%F"
+
+-- don't include the timezone
+toLocalTimeOfDay :: ZonedTime -> String
+toLocalTimeOfDay = TF.formatTime TF.defaultTimeLocale "%T"

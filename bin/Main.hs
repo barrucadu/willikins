@@ -68,22 +68,7 @@ systemPrompt events now = unlines prompt where
     , "The current date is " ++ today
     ]
 
-  showEvent event =
-    let
-      timespec
-        | GCal.eAllDay event =
-          let
-            -- subtract a day so we have an inclusive range of days
-            endD = TF.parseTimeOrError True TF.defaultTimeLocale "%Y-%m-%d" $ GCal.eEnd event
-            endD' = addUTCTime (negate nominalDay) endD
-            end = TF.formatTime TF.defaultTimeLocale "%Y-%m-%d" endD'
-          in if GCal.eStart event == end
-             then " all day on " ++ GCal.eStart event
-             else " from " ++ GCal.eStart event ++ " to " ++ end ++ " inclusive"
-        | otherwise = " from " ++ GCal.eStart event ++ " to " ++ GCal.eEnd event
-
-      locspec = maybe "" (" at "++) $ GCal.eLocation event
-    in "- " ++ GCal.eTitle event ++ timespec ++ locspec
+  showEvent e = "- " ++ GCal.formatEventForLLM e
 
   today = TF.formatTime TF.defaultTimeLocale "%A, %Y-%m-%d" now
 
