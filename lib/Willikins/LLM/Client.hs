@@ -4,7 +4,6 @@
 
 module Willikins.LLM.Client
   ( LLM(..)
-  , defaultLLM
   -- * Authentication
   , Credentials
   , credentialsFromEnvironment
@@ -29,15 +28,6 @@ data LLM = LLM
   , llmCredentials :: Credentials
   , llmTools :: [(Tool, A.Value -> IO (Either String String))]
   , llmMaxTokens :: Integer
-  }
-
--- | Default values for all parameters
-defaultLLM :: Credentials -> LLM
-defaultLLM c = LLM
-  { llmModel = Claude37SonnetLatest
-  , llmCredentials = c
-  , llmTools = []
-  , llmMaxTokens = 5000
   }
 
 newtype Credentials = Credentials

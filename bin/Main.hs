@@ -5,7 +5,6 @@
 module Main where
 
 import qualified Data.Aeson as A
-import qualified Data.Aeson.Types as A
 import Data.Foldable (traverse_)
 import Data.Time (UTCTime, getCurrentTime, addUTCTime, nominalDay)
 import qualified Data.Time.Format as TF
@@ -27,10 +26,10 @@ main = Mem.withDatabase "willikins.sqlite" $ \db -> do
   getArgs >>= \case
     ["debug", "dump-system-prompt"] -> putStrLn sysPrompt
     ["debug", "dump-facts"] -> traverse_ print facts
-    _ -> chatbot sysPrompt db $ (LLM.defaultLLM credentials) { LLM.llmTools = demoTools db }
+    _ -> chatbot sysPrompt $ LLM.defaultLLM credentials db
 
-chatbot :: String -> Mem.Connection -> LLM.LLM -> IO ()
-chatbot sysPrompt db llm = go initialHistory where
+chatbot :: String -> LLM.LLM -> IO ()
+chatbot sysPrompt llm = go initialHistory where
   go history = LLM.oneshot llm sysPrompt history >>= \case
     Right history' -> do
       traverse_ (\m -> printMessage m >> putStrLn sep) history'
@@ -57,48 +56,6 @@ getQuery = go [] where
     if l == "."
       then pure (unlines (reverse ls))
       else go (l:ls)
-
-demoTools :: Mem.Connection -> [(LLM.Tool, A.Value -> IO (Either String String))]
-demoTools db = [(createMemory, doCreateMemory), (deleteMemory, doDeleteMemory)] where
-  createMemory = LLM.Tool
-    { tName = "create_memory"
-    , tDescription = "Commit a piece of information to memory so that you can recall and reference it later."
-    , tArguments =
-      [ LLM.ToolArgument
-        { taName = "text"
-        , taType = "string"
-        , taDescription = "The information to note down, keep it short but include all important details."
-        , taRequired = True
-        }
-      , LLM.ToolArgument
-        { taName = "date"
-        , taType = "string"
-        , taDescription = "The actual date of the event or reminder.  Set a date whenever possible, but if no date is relevant leave this out."
-        , taRequired = False
-        }
-      ]
-    }
-
-  deleteMemory = LLM.Tool
-    { tName = "delete_memory"
-    , tDescription = "Delete a memory when it is no longer relevant."
-    , tArguments =
-      [ LLM.ToolArgument
-        { taName = "id"
-        , taType = "integer"
-        , taDescription = "ID of the memory to delete.  Each memory is displayed with its ID in the format '[ID: 123]'."
-        , taRequired = True
-        }
-      ]
-    }
-
-  doCreateMemory args = case A.parseMaybe (A.withObject "args" $ \v -> (,) <$> v A..: "text" <*> v A..:? "date") args of
-    Just val -> Right . Mem.formatFactForLLM <$> Mem.insertFact db val
-    Nothing -> pure $ Left "Missing required parameter 'text'"
-
-  doDeleteMemory args = case A.parseMaybe (A.withObject "args" $ \v -> v A..: "id") args of
-    Just val -> Right ("Deleted memory [ID: " ++ show val ++ "]") <$ Mem.deleteFact db val
-    Nothing -> pure $ Left "Missing required parameter 'id'"
 
 systemPrompt :: [GCal.Event] -> UTCTime -> [Mem.Fact] -> String
 systemPrompt events now facts = unlines prompt where
