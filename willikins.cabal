@@ -19,7 +19,9 @@ common warnings
 library
     import:           warnings
     exposed-modules:  Willikins.Integration.GoogleCalendar
+                    , Willikins.LLM
                     , Willikins.LLM.Client
+                    , Willikins.LLM.Types
                     , Willikins.Memory
     -- other-modules:
     -- other-extensions:

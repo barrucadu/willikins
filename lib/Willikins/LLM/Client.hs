@@ -1,48 +1,44 @@
-{-# LANGUAGE DeriveGeneric #-}
 {-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
 module Willikins.LLM.Client
-  ( Model(..)
-  , defaultModel
+  ( LLM(..)
+  , defaultLLM
   -- * Authentication
   , Credentials
   , credentialsFromEnvironment
   -- * Errors
   , Error(..)
   -- * Messages API
-  , MessagesRequest(..)
-  , Message(..)
-  , Role(..)
-  , Tool(..)
-  , ToolArgument(..)
-  , MessagesResponse(..)
-  , MessagesResponseContent(..)
   , oneshot
-  , defaultMessagesRequest
   , postMessages
   ) where
 
 import qualified Control.Exception.Safe as E
-import Data.Aeson (ToJSON, FromJSON)
+import Data.Aeson (FromJSON)
 import qualified Data.Aeson as A
-import Data.Either (isLeft)
 import Data.String (fromString)
-import GHC.Generics (Generic)
 import qualified Network.HTTP.Simple as H
 import System.Environment (getEnv)
 
-data Model = Claude37SonnetLatest
-  deriving Show
+import Willikins.LLM.Types
 
-instance ToJSON Model where
-  toJSON Claude37SonnetLatest = "claude-3-7-sonnet-latest"
+data LLM = LLM
+  { llmModel :: Model
+  , llmCredentials :: Credentials
+  , llmTools :: [(Tool, A.Value -> IO (Either String String))]
+  , llmMaxTokens :: Integer
+  }
 
-defaultModel :: Model
-defaultModel = Claude37SonnetLatest
-
--------------------------------------------------------------------------------
+-- | Default values for all parameters
+defaultLLM :: Credentials -> LLM
+defaultLLM c = LLM
+  { llmModel = Claude37SonnetLatest
+  , llmCredentials = c
+  , llmTools = []
+  , llmMaxTokens = 5000
+  }
 
 newtype Credentials = Credentials
   { apiKey :: String
@@ -68,164 +64,17 @@ instance FromJSON Error where
 
 -------------------------------------------------------------------------------
 
--- | https://docs.anthropic.com/en/api/messages
-data MessagesRequest = MessagesRequest
-  { maxTokens :: Integer
-  , messages :: [Message]
-  , model :: Model
-  , system :: String
-  , tools :: [Tool]
-  }
-  deriving (Generic, Show)
-
-instance ToJSON MessagesRequest where
-  toEncoding = A.genericToEncoding A.defaultOptions { A.fieldLabelModifier = A.camelTo2 '_' }
-
-defaultMessagesRequest :: MessagesRequest
-defaultMessagesRequest = MessagesRequest
-  { maxTokens = 5000
-  , messages = []
-  , model = defaultModel
-  , system = ""
-  , tools = []
-  }
-
--- | https://docs.anthropic.com/en/api/messages#body-messages
-data Message
-  = MessageText
-    { mtRole :: Role
-    , mtText :: String
-    }
-  | MessageToolUse
-    { mtuId :: String
-    , mtuTool :: String
-    , mtuInput :: A.Value
-    }
-  | MessageToolResult
-    { mtrId :: String
-    , mtrText :: Either String String
-    }
-  deriving Show
-
-instance ToJSON Message where
-  toJSON t = A.object [ "role" A..= role, "content" A..= content ] where
-    role = case t of
-      MessageText{..} -> mtRole
-      MessageToolUse{} -> Assistant
-      MessageToolResult{} -> User
-
-    content = case t of
-      MessageText{..}
-        | null mtText -> []
-        | otherwise ->
-          [ A.object
-            [ "type" A..= ("text" :: String)
-            , "text" A..= mtText
-            ]
-          ]
-      MessageToolUse{..} ->
-        [ A.object
-          [ "type" A..= ("tool_use" :: String)
-          , "id" A..= mtuId
-          , "name" A..= mtuTool
-          , "input" A..= mtuInput
-          ]
-        ]
-      MessageToolResult{..} ->
-        [ A.object
-          [ "type" A..= ("tool_result" :: String)
-          , "tool_use_id" A..= mtrId
-          , "content" A..= either id id mtrText
-          , "is_error" A..= isLeft mtrText
-          ]
-        ]
-
--- | https://docs.anthropic.com/en/api/messages#body-messages-role
-data Role = User | Assistant
-  deriving Show
-
-instance ToJSON Role where
-  toJSON User = "user"
-  toJSON Assistant = "assistant"
-
--- | https://docs.anthropic.com/en/api/messages#body-tools
-data Tool = Tool
-  { tName :: String
-  , tDescription :: String
-  , tArguments :: [ToolArgument]
-  }
-  deriving Show
-
-instance ToJSON Tool where
-  toJSON t = json where
-    json = A.object
-      [ "name" A..= tName t
-      , "description" A..= tDescription t
-      , "input_schema" A..= A.object
-        [ "type" A..= ("object" :: String)
-        , "properties" A..= A.object (map toolArgumentJSON (tArguments t))
-        , "required" A..= [taName ta | ta <- tArguments t, taRequired ta]
-        ]
-      ]
-
-    toolArgumentJSON ta = fromString (taName ta) A..= A.object
-      [ "type" A..= taType ta
-      , "description" A..= taDescription ta
-      ]
-
--- | https://docs.anthropic.com/en/api/messages#body-tools
-data ToolArgument = ToolArgument
-  { taName :: String
-  , taType :: String
-  , taDescription :: String
-  , taRequired :: Bool
-  }
-  deriving Show
-
--- | https://docs.anthropic.com/en/api/messages#response-content
-newtype MessagesResponse = MessagesResponse
-  { mrContent :: [MessagesResponseContent]
-  }
-  deriving (Generic, Show)
-
-instance FromJSON MessagesResponse where
-  parseJSON = A.genericParseJSON A.defaultOptions { A.fieldLabelModifier = A.camelTo2 '_' . drop 2 }
-
-data MessagesResponseContent
-  = MessagesResponseContentText
-    { mrctText :: String
-    }
-  | MessagesResponseContentToolUse
-    { mrctuId :: String
-    , mrctuTool :: String
-    , mrctuInput :: A.Value
-    }
-  deriving Show
-
-instance FromJSON MessagesResponseContent where
-  parseJSON = A.withObject "Content" $ \v -> do
-      ty <- v A..: "type"
-      if ty == ("tool_use" :: A.Value) then parseToolUse v else parseText v
-    where
-      parseToolUse v =
-        MessagesResponseContentToolUse <$> v A..: "id" <*> v A..: "name" <*> v A..: "input"
-
-      parseText v =
-        MessagesResponseContentText <$> v A..: "text"
-
 -- | Make a request to the LLM and return its response, resolving any tool use.
 oneshot
-  :: [(Tool, A.Value -> IO (Either String String))]
-  -- ^ Tools
-  -> Credentials
-  -- ^ Credentials
+  :: LLM
+  -- ^ LLM client
   -> String
   -- ^ System prompt
   -> [Message]
   -- ^ Conversation history
   -> IO (Either Error [Message])
-oneshot ts0 credentials sysPrompt history0 = go [] where
-  go history' = postMessages credentials (req (history0 ++ history')) >>= \case
+oneshot LLM{..} sysPrompt history0 = go [] where
+  go history' = postMessages llmCredentials (req (history0 ++ history')) >>= \case
     Right resp -> handleResponse False history' (mrContent resp)
     Left err -> pure $ Left err
 
@@ -240,13 +89,21 @@ oneshot ts0 credentials sysPrompt history0 = go [] where
     let user = MessageToolResult { mtrId = mrctuId, mtrText = toolResponse }
     handleResponse True (history' ++ [assistant, user]) ms
 
-  handleTool name input = handleTool' ts0 where
+  handleTool name input = handleTool' llmTools where
     handleTool' [] = pure $ Left ("No such tool '" ++ name ++ "'")
     handleTool' ((t, f):ts)
       | tName t == name = f input
       | otherwise = handleTool' ts
 
-  req history = defaultMessagesRequest { messages = history, system = sysPrompt, tools = map fst ts0 }
+  req history = defaultReq { messages = history }
+
+  defaultReq = MessagesRequest
+    { maxTokens = llmMaxTokens
+    , messages = []
+    , model = llmModel
+    , system = sysPrompt
+    , tools = map fst llmTools
+    }
 
 -- | Make a single request to the LLM API
 postMessages :: Credentials -> MessagesRequest -> IO (Either Error MessagesResponse)
@@ -255,7 +112,7 @@ postMessages credentials mr = http credentials req where
 
 -------------------------------------------------------------------------------
 
-http :: (FromJSON response) => Credentials -> H.Request -> IO (Either Error response)
+http :: FromJSON response => Credentials -> H.Request -> IO (Either Error response)
 http credentials req = do
   resp <- E.tryAny (H.getResponseBody <$> H.httpLBS req')
   pure $ case resp of

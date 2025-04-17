@@ -14,11 +14,12 @@ import System.Environment (getArgs)
 import System.Exit (exitFailure)
 
 import qualified Willikins.Integration.GoogleCalendar as GCal
-import Willikins.LLM.Client
+import qualified Willikins.LLM as LLM
 import qualified Willikins.Memory as Mem
 
 main :: IO ()
 main = Mem.withDatabase "willikins.sqlite" $ \db -> do
+  credentials <- LLM.credentialsFromEnvironment
   events <- GCal.fetchEvents =<< GCal.credentialsFromEnvironment
   facts <- Mem.getAllFacts db
   now <- getCurrentTime
@@ -26,28 +27,28 @@ main = Mem.withDatabase "willikins.sqlite" $ \db -> do
   getArgs >>= \case
     ["debug", "dump-system-prompt"] -> putStrLn sysPrompt
     ["debug", "dump-facts"] -> traverse_ print facts
-    _ -> credentialsFromEnvironment >>= chatbot sysPrompt db
+    _ -> chatbot sysPrompt db $ (LLM.defaultLLM credentials) { LLM.llmTools = demoTools db }
 
-chatbot :: String -> Mem.Connection -> Credentials -> IO ()
-chatbot sysPrompt db c = go initialHistory where
-  go history = oneshot (demoTools db) c sysPrompt history >>= \case
+chatbot :: String -> Mem.Connection -> LLM.LLM -> IO ()
+chatbot sysPrompt db llm = go initialHistory where
+  go history = LLM.oneshot llm sysPrompt history >>= \case
     Right history' -> do
       traverse_ (\m -> printMessage m >> putStrLn sep) history'
       query <- getQuery
       putStrLn sep
-      let user = MessageText { mtRole = User, mtText = query }
+      let user = LLM.MessageText { mtRole = LLM.User, mtText = query }
       go (history ++ history' ++ [user])
     Left err -> die err
 
-  printMessage MessageText{..} = putStrLn mtText
-  printMessage MessageToolUse{..} = do
+  printMessage LLM.MessageText{..} = putStrLn mtText
+  printMessage LLM.MessageToolUse{..} = do
     putStrLn $ "TOOL USE: " ++ mtuId ++ " [" ++ mtuTool ++ "]"
     print mtuInput
-  printMessage MessageToolResult{..} = do
+  printMessage LLM.MessageToolResult{..} = do
     putStrLn $ "TOOL RESPONSE: " ++ mtrId
     print mtrText
 
-  initialHistory = [MessageText { mtRole = Assistant, mtText = "" }]
+  initialHistory = [LLM.MessageText { mtRole = LLM.Assistant, mtText = "" }]
 
 getQuery :: IO String
 getQuery = go [] where
@@ -57,19 +58,19 @@ getQuery = go [] where
       then pure (unlines (reverse ls))
       else go (l:ls)
 
-demoTools :: Mem.Connection -> [(Tool, A.Value -> IO (Either String String))]
+demoTools :: Mem.Connection -> [(LLM.Tool, A.Value -> IO (Either String String))]
 demoTools db = [(createMemory, doCreateMemory), (deleteMemory, doDeleteMemory)] where
-  createMemory = Tool
+  createMemory = LLM.Tool
     { tName = "create_memory"
     , tDescription = "Commit a piece of information to memory so that you can recall and reference it later."
     , tArguments =
-      [ ToolArgument
+      [ LLM.ToolArgument
         { taName = "text"
         , taType = "string"
         , taDescription = "The information to note down, keep it short but include all important details."
         , taRequired = True
         }
-      , ToolArgument
+      , LLM.ToolArgument
         { taName = "date"
         , taType = "string"
         , taDescription = "The actual date of the event or reminder.  Set a date whenever possible, but if no date is relevant leave this out."
@@ -78,11 +79,11 @@ demoTools db = [(createMemory, doCreateMemory), (deleteMemory, doDeleteMemory)] 
       ]
     }
 
-  deleteMemory = Tool
+  deleteMemory = LLM.Tool
     { tName = "delete_memory"
     , tDescription = "Delete a memory when it is no longer relevant."
     , tArguments =
-      [ ToolArgument
+      [ LLM.ToolArgument
         { taName = "id"
         , taType = "integer"
         , taDescription = "ID of the memory to delete.  Each memory is displayed with its ID in the format '[ID: 123]'."
@@ -141,14 +142,14 @@ sep = unlines
   , "-----"
   ]
 
-die :: Error -> IO a
+die :: LLM.Error -> IO a
 die err = do
   putStrLn "My humble apologies sir, I have encountered a problem, namely:"
   putStrLn ""
   putStrLn $ case err of
-    ApiError eType eMessage -> "    API Error '" ++ eType ++ "': " ++ eMessage
-    InvalidApiResponseError raw -> "    Invalid API Response: " ++ raw
-    NetworkError -> "    Network Error"
+    LLM.ApiError eType eMessage -> "    API Error '" ++ eType ++ "': " ++ eMessage
+    LLM.InvalidApiResponseError raw -> "    Invalid API Response: " ++ raw
+    LLM.NetworkError -> "    Network Error"
   putStrLn ""
   putStrLn "I'll go have a lie down, but please do not hesitate to call upon me."
   exitFailure
