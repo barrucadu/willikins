@@ -3,6 +3,7 @@
 
 module Main where
 
+import Data.Foldable (traverse_)
 import Data.Time (UTCTime, getCurrentTime, addUTCTime, nominalDay)
 import qualified Data.Time.Format as TF
 import System.IO (getLine, putStrLn)
@@ -23,32 +24,22 @@ main = do
 
 chatbot :: String -> Credentials -> IO ()
 chatbot sysPrompt c = go initialHistory where
-  go history = postMessages c (req history) >>= \case
-    Right resp -> handleResponse history (mrContent resp)
+  go history = oneshot demoTools c sysPrompt history >>= \case
+    Right history' -> do
+      traverse_ (\m -> printMessage m >> putStrLn sep) history'
+      query <- getQuery
+      putStrLn sep
+      let user = MessageText { mtRole = User, mtText = query }
+      go (history ++ history' ++ [user])
     Left err -> die err
 
-  handleResponse history [] = go history
-  handleResponse history (MessagesResponseContentText{..}:ms) = do
-    putStrLn mrctText
-    putStrLn sep
-    query <- getQuery
-    putStrLn sep
-    let assistant = MessageText { mtRole = Assistant, mtText = mrctText }
-    let user = MessageText { mtRole = User, mtText = query }
-    handleResponse (history ++ [assistant, user]) ms
-  handleResponse history (MessagesResponseContentToolUse{..}:ms) = do
-    putStrLn $ "TOOL USE: " ++ mrctuTool
-    print mrctuInput
-    putStrLn sep
-    putStrLn "TOOL RESPONSE:"
-    toolResponse <- getToolResponse mrctuTool mrctuInput
-    print toolResponse
-    putStrLn sep
-    let assistant = MessageToolUse { mtuId = mrctuId, mtuTool = mrctuTool, mtuInput = mrctuInput }
-    let user = MessageToolResult { mtrId = mrctuId, mtrText = toolResponse }
-    handleResponse (history ++ [assistant, user]) ms
-
-  req history = defaultMessagesRequest { messages = history, system = sysPrompt, tools = demoTools }
+  printMessage MessageText{..} = putStrLn mtText
+  printMessage MessageToolUse{..} = do
+    putStrLn $ "TOOL USE: " ++ mtuId ++ " [" ++ mtuTool ++ "]"
+    print mtuInput
+  printMessage MessageToolResult{..} = do
+    putStrLn $ "TOOL RESPONSE: " ++ mtrId
+    print mtrText
 
   initialHistory = [MessageText { mtRole = Assistant, mtText = "" }]
 
@@ -60,13 +51,9 @@ getQuery = go [] where
       then pure (unlines (reverse ls))
       else go (l:ls)
 
-getToolResponse :: String -> a -> IO (Either String String)
-getToolResponse "create_memory" _ = pure $ Right "New memory ID: MEM123"
-getToolResponse name _ = pure $ Left ("No such tool '" ++ name ++ "'")
-
-demoTools :: [Tool]
-demoTools = [create_memory] where
-  create_memory = Tool
+demoTools :: [(Tool, a -> IO (Either String String))]
+demoTools = [(createMemory, doCreateMemory)] where
+  createMemory = Tool
     { tName = "create_memory"
     , tDescription = "Commit a piece of information to memory so that you can recall and reference it later."
     , tArguments =
@@ -84,6 +71,8 @@ demoTools = [create_memory] where
         }
       ]
     }
+
+  doCreateMemory _ = pure $ Right "New memory ID: MEM123"
 
 systemPrompt :: [GCal.Event] -> UTCTime -> String
 systemPrompt events now = unlines prompt where

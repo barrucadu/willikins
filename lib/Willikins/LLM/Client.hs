@@ -1,4 +1,5 @@
 {-# LANGUAGE DeriveGeneric #-}
+{-# LANGUAGE LambdaCase #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
@@ -18,6 +19,7 @@ module Willikins.LLM.Client
   , ToolArgument(..)
   , MessagesResponse(..)
   , MessagesResponseContent(..)
+  , oneshot
   , defaultMessagesRequest
   , postMessages
   ) where
@@ -211,6 +213,42 @@ instance FromJSON MessagesResponseContent where
       parseText v =
         MessagesResponseContentText <$> v A..: "text"
 
+-- | Make a request to the LLM and return its response, resolving any tool use.
+oneshot
+  :: [(Tool, A.Value -> IO (Either String String))]
+  -- ^ Tools
+  -> Credentials
+  -- ^ Credentials
+  -> String
+  -- ^ System prompt
+  -> [Message]
+  -- ^ Conversation history
+  -> IO (Either Error [Message])
+oneshot ts0 credentials sysPrompt history0 = go [] where
+  go history' = postMessages credentials (req (history0 ++ history')) >>= \case
+    Right resp -> handleResponse False history' (mrContent resp)
+    Left err -> pure $ Left err
+
+  handleResponse True history' [] = go history'
+  handleResponse False history' [] = pure (Right history')
+  handleResponse loop history' (MessagesResponseContentText{..}:ms) =
+    let assistant = MessageText { mtRole = Assistant, mtText = mrctText }
+    in handleResponse loop (history' ++ [assistant]) ms
+  handleResponse _ history' (MessagesResponseContentToolUse{..}:ms) = do
+    toolResponse <- handleTool mrctuTool mrctuInput
+    let assistant = MessageToolUse { mtuId = mrctuId, mtuTool = mrctuTool, mtuInput = mrctuInput }
+    let user = MessageToolResult { mtrId = mrctuId, mtrText = toolResponse }
+    handleResponse True (history' ++ [assistant, user]) ms
+
+  handleTool name input = handleTool' ts0 where
+    handleTool' [] = pure $ Left ("No such tool '" ++ name ++ "'")
+    handleTool' ((t, f):ts)
+      | tName t == name = f input
+      | otherwise = handleTool' ts
+
+  req history = defaultMessagesRequest { messages = history, system = sysPrompt, tools = map fst ts0 }
+
+-- | Make a single request to the LLM API
 postMessages :: Credentials -> MessagesRequest -> IO (Either Error MessagesResponse)
 postMessages credentials mr = http credentials req where
   req = H.setRequestBodyJSON mr $ H.parseRequest_ "POST https://api.anthropic.com/v1/messages"
