@@ -1,4 +1,5 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE RecordWildCards #-}
 
 module Main where
 
@@ -18,22 +19,38 @@ main = do
   let sysPrompt = systemPrompt events now
   getArgs >>= \case
     ["debug", "dump-system-prompt"] -> putStrLn sysPrompt
-    _ -> credentialsFromEnvironment >>= \c -> chatbot c sysPrompt
+    _ -> credentialsFromEnvironment >>= chatbot sysPrompt
 
-chatbot :: Credentials -> String -> IO ()
-chatbot c sysPrompt = go initialHistory where
+chatbot :: String -> Credentials -> IO ()
+chatbot sysPrompt c = go initialHistory where
   go history = postMessages c (req history) >>= \case
-    Right resp -> do
-      putStrLn resp
-      putStrLn sep
-      query <- getQuery
-      putStrLn sep
-      go (history ++ [Message { role = Assistant, content = resp }, Message { role = User, content = query }])
+    Right resp -> handleResponse history (mrContent resp)
     Left err -> die err
 
-  req history = MessagesRequest { maxTokens = 5000, messages = history, model = defaultModel, system = sysPrompt }
+  handleResponse history [] = go history
+  handleResponse history (MessagesResponseContentText{..}:ms) = do
+    putStrLn mrctText
+    putStrLn sep
+    query <- getQuery
+    putStrLn sep
+    let assistant = MessageText { mtRole = Assistant, mtText = mrctText }
+    let user = MessageText { mtRole = User, mtText = query }
+    handleResponse (history ++ [assistant, user]) ms
+  handleResponse history (MessagesResponseContentToolUse{..}:ms) = do
+    putStrLn $ "TOOL USE: " ++ mrctuTool
+    print mrctuInput
+    putStrLn sep
+    putStrLn "TOOL RESPONSE:"
+    toolResponse <- getToolResponse mrctuTool mrctuInput
+    print toolResponse
+    putStrLn sep
+    let assistant = MessageToolUse { mtuId = mrctuId, mtuTool = mrctuTool, mtuInput = mrctuInput }
+    let user = MessageToolResult { mtrId = mrctuId, mtrText = toolResponse }
+    handleResponse (history ++ [assistant, user]) ms
 
-  initialHistory = [Message { role = Assistant, content = "" }]
+  req history = defaultMessagesRequest { messages = history, system = sysPrompt, tools = demoTools }
+
+  initialHistory = [MessageText { mtRole = Assistant, mtText = "" }]
 
 getQuery :: IO String
 getQuery = go [] where
@@ -42,6 +59,31 @@ getQuery = go [] where
     if l == "."
       then pure (unlines (reverse ls))
       else go (l:ls)
+
+getToolResponse :: String -> a -> IO (Either String String)
+getToolResponse "create_memory" _ = pure $ Right "New memory ID: MEM123"
+getToolResponse name _ = pure $ Left ("No such tool '" ++ name ++ "'")
+
+demoTools :: [Tool]
+demoTools = [create_memory] where
+  create_memory = Tool
+    { tName = "create_memory"
+    , tDescription = "Commit a piece of information to memory so that you can recall and reference it later."
+    , tArguments =
+      [ ToolArgument
+        { taName = "text"
+        , taType = "string"
+        , taDescription = "The information to note down, keep it short but include all important details."
+        , taRequired = False
+        }
+      , ToolArgument
+        { taName = "date"
+        , taType = "string"
+        , taDescription = "The actual date of the event or reminder.  Set a date whenever possible, but if no date is relevant leave this out."
+        , taRequired = False
+        }
+      ]
+    }
 
 systemPrompt :: [GCal.Event] -> UTCTime -> String
 systemPrompt events now = unlines prompt where
@@ -66,6 +108,8 @@ systemPrompt events now = unlines prompt where
     ] ++ map showEvent events ++
     [ ""
     , "The current date is " ++ today
+    , ""
+    , "Before responding to the user, use the create_memory tool to record any reminders or any other information that might be useful to reference later."
     ]
 
   showEvent e = "- " ++ GCal.formatEventForLLM e
