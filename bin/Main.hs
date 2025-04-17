@@ -1,8 +1,11 @@
 {-# LANGUAGE LambdaCase #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE RecordWildCards #-}
 
 module Main where
 
+import qualified Data.Aeson as A
+import qualified Data.Aeson.Types as A
 import Data.Foldable (traverse_)
 import Data.Time (UTCTime, getCurrentTime, addUTCTime, nominalDay)
 import qualified Data.Time.Format as TF
@@ -12,19 +15,22 @@ import System.Exit (exitFailure)
 
 import qualified Willikins.Integration.GoogleCalendar as GCal
 import Willikins.LLM.Client
+import qualified Willikins.Memory as Mem
 
 main :: IO ()
-main = do
+main = Mem.withDatabase "willikins.sqlite" $ \db -> do
   events <- GCal.fetchEvents =<< GCal.credentialsFromEnvironment
+  facts <- Mem.getAllFacts db
   now <- getCurrentTime
-  let sysPrompt = systemPrompt events now
+  let sysPrompt = systemPrompt events now facts
   getArgs >>= \case
     ["debug", "dump-system-prompt"] -> putStrLn sysPrompt
-    _ -> credentialsFromEnvironment >>= chatbot sysPrompt
+    ["debug", "dump-facts"] -> traverse_ print facts
+    _ -> credentialsFromEnvironment >>= chatbot sysPrompt db
 
-chatbot :: String -> Credentials -> IO ()
-chatbot sysPrompt c = go initialHistory where
-  go history = oneshot demoTools c sysPrompt history >>= \case
+chatbot :: String -> Mem.Connection -> Credentials -> IO ()
+chatbot sysPrompt db c = go initialHistory where
+  go history = oneshot (demoTools db) c sysPrompt history >>= \case
     Right history' -> do
       traverse_ (\m -> printMessage m >> putStrLn sep) history'
       query <- getQuery
@@ -51,8 +57,8 @@ getQuery = go [] where
       then pure (unlines (reverse ls))
       else go (l:ls)
 
-demoTools :: [(Tool, a -> IO (Either String String))]
-demoTools = [(createMemory, doCreateMemory)] where
+demoTools :: Mem.Connection -> [(Tool, A.Value -> IO (Either String String))]
+demoTools db = [(createMemory, doCreateMemory), (deleteMemory, doDeleteMemory)] where
   createMemory = Tool
     { tName = "create_memory"
     , tDescription = "Commit a piece of information to memory so that you can recall and reference it later."
@@ -61,7 +67,7 @@ demoTools = [(createMemory, doCreateMemory)] where
         { taName = "text"
         , taType = "string"
         , taDescription = "The information to note down, keep it short but include all important details."
-        , taRequired = False
+        , taRequired = True
         }
       , ToolArgument
         { taName = "date"
@@ -72,10 +78,29 @@ demoTools = [(createMemory, doCreateMemory)] where
       ]
     }
 
-  doCreateMemory _ = pure $ Right "New memory ID: MEM123"
+  deleteMemory = Tool
+    { tName = "delete_memory"
+    , tDescription = "Delete a memory when it is no longer relevant."
+    , tArguments =
+      [ ToolArgument
+        { taName = "id"
+        , taType = "integer"
+        , taDescription = "ID of the memory to delete.  Each memory is displayed with its ID in the format '[ID: 123]'."
+        , taRequired = True
+        }
+      ]
+    }
 
-systemPrompt :: [GCal.Event] -> UTCTime -> String
-systemPrompt events now = unlines prompt where
+  doCreateMemory args = case A.parseMaybe (A.withObject "args" $ \v -> (,) <$> v A..: "text" <*> v A..:? "date") args of
+    Just val -> Right . Mem.formatFactForLLM <$> Mem.insertFact db val
+    Nothing -> pure $ Left "Missing required parameter 'text'"
+
+  doDeleteMemory args = case A.parseMaybe (A.withObject "args" $ \v -> v A..: "id") args of
+    Just val -> Right ("Deleted memory [ID: " ++ show val ++ "]") <$ Mem.deleteFact db val
+    Nothing -> pure $ Left "Missing required parameter 'id'"
+
+systemPrompt :: [GCal.Event] -> UTCTime -> [Mem.Fact] -> String
+systemPrompt events now facts = unlines prompt where
   prompt =
     [ "You are Willikins, a dignified and highly professional butler."
     , "You serve your master faithfully, to the best of your abilities and knowledge."
@@ -99,9 +124,14 @@ systemPrompt events now = unlines prompt where
     , "The current date is " ++ today
     , ""
     , "Before responding to the user, use the create_memory tool to record any reminders or any other information that might be useful to reference later."
-    ]
+    , "You do not need to commit the calendar entries to memory."
+    , ""
+    , "You have previously committed the following facts to memory:"
+    ] ++ map showFact facts
 
   showEvent e = "- " ++ GCal.formatEventForLLM e
+
+  showFact f = "- " ++ Mem.formatFactForLLM f
 
   today = TF.formatTime TF.defaultTimeLocale "%A, %Y-%m-%d" now
 
