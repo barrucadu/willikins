@@ -21,6 +21,8 @@ import qualified Network.HTTP.Simple as H
 import System.Environment (getEnv)
 import qualified System.Process as P
 
+import Willikins.Utils
+
 data Credentials = Credentials
   { crCalendarId :: String
   , crCredentialsFile :: String
@@ -72,12 +74,12 @@ instance FromJSON Event where
         end <- endv A..: "dateTime"
         pure Event { eTitle = title, eLocation = loc, eStart = start, eEnd = end, eAllDay = False }
 
-fetchEvents :: Credentials -> IO [Event]
+fetchEvents :: Credentials -> IO (Maybe [Event])
 fetchEvents credentials = do
     accessToken <- googleAuthAccessToken credentials
     now <- getCurrentTime
     let req = H.setRequestBearerAuth accessToken . H.setRequestQueryString (query now) $ H.parseRequest_ ("GET " ++ url)
-    filter (not . isBoring) . elrItems . H.getResponseBody <$> H.httpJSON req
+    either (const Nothing) (Just . filter (not . isBoring) . elrItems) <$> httpRequestJSON req
   where
     url = "https://www.googleapis.com/calendar/v3/calendars/" ++ crCalendarId credentials ++ "/events"
 

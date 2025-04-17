@@ -57,7 +57,7 @@ getQuery = go [] where
       then pure (unlines (reverse ls))
       else go (l:ls)
 
-systemPrompt :: [GCal.Event] -> UTCTime -> [Mem.Fact] -> String
+systemPrompt :: Maybe [GCal.Event] -> UTCTime -> [Mem.Fact] -> String
 systemPrompt events now facts = unlines prompt where
   prompt =
     [ "You are Willikins, a dignified and highly professional butler."
@@ -77,7 +77,7 @@ systemPrompt events now facts = unlines prompt where
     , ""
     , "You are aware of the following calendar entries:"
     , ""
-    ] ++ map showEvent events ++
+    ] ++ maybe ["Error: could not retrieve calendar entries"] (map showEvent) events ++
     [ ""
     , "The current date is " ++ today
     , ""

@@ -14,14 +14,15 @@ module Willikins.LLM.Client
   , postMessages
   ) where
 
-import qualified Control.Exception.Safe as E
 import Data.Aeson (FromJSON)
 import qualified Data.Aeson as A
+import Data.Maybe (fromMaybe)
 import Data.String (fromString)
 import qualified Network.HTTP.Simple as H
 import System.Environment (getEnv)
 
 import Willikins.LLM.Types
+import Willikins.Utils
 
 data LLM = LLM
   { llmModel :: Model
@@ -97,21 +98,12 @@ oneshot LLM{..} sysPrompt history0 = go [] where
 
 -- | Make a single request to the LLM API
 postMessages :: Credentials -> MessagesRequest -> IO (Either Error MessagesResponse)
-postMessages credentials mr = http credentials req where
-  req = H.setRequestBodyJSON mr $ H.parseRequest_ "POST https://api.anthropic.com/v1/messages"
+postMessages credentials mr = either (Left . mapError) Right <$> httpRequestJSON req where
+  mapError Nothing = NetworkError
+  mapError (Just bs) = fromMaybe (InvalidApiResponseError (show bs)) $ A.decode bs
 
--------------------------------------------------------------------------------
-
-http :: FromJSON response => Credentials -> H.Request -> IO (Either Error response)
-http credentials req = do
-  resp <- E.tryAny (H.getResponseBody <$> H.httpLBS req')
-  pure $ case resp of
-    Right body -> case A.decode body of
-      Just x -> Right x
-      Nothing -> maybe (Left (InvalidApiResponseError (show body))) Left $ A.decode body
-    Left _ -> Left NetworkError
-  where
-    req' =
-      H.setRequestHeader "x-api-key" [fromString $ apiKey credentials] $
-      H.setRequestHeader "anthropic-version" ["2023-06-01"]
-      req
+  req =
+    H.setRequestHeader "x-api-key" [fromString $ apiKey credentials] $
+    H.setRequestHeader "anthropic-version" ["2023-06-01"] $
+    H.setRequestBodyJSON mr $
+    H.parseRequest_ "POST https://api.anthropic.com/v1/messages"
