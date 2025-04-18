@@ -29,6 +29,7 @@ data LLM = LLM
   , llmCredentials :: Credentials
   , llmTools :: [(Tool, A.Value -> IO (Either String String))]
   , llmMaxTokens :: Integer
+  , llmSystemPrompt :: String
   }
 
 newtype Credentials = Credentials
@@ -60,12 +61,10 @@ instance FromJSON Error where
 oneshot
   :: LLM
   -- ^ LLM client
-  -> String
-  -- ^ System prompt
   -> [Message]
   -- ^ Conversation history
   -> IO (Either Error [Message])
-oneshot LLM{..} sysPrompt history0 = go [] where
+oneshot LLM{..} history0 = go [] where
   go history' = postMessages llmCredentials (req (history0 ++ history')) >>= \case
     Right resp -> handleResponse False history' (mrContent resp)
     Left err -> pure $ Left err
@@ -93,7 +92,7 @@ oneshot LLM{..} sysPrompt history0 = go [] where
     { maxTokens = llmMaxTokens
     , messages = []
     , model = llmModel
-    , system = sysPrompt
+    , system = llmSystemPrompt
     , tools = map fst llmTools
     }
 

@@ -9,8 +9,6 @@ import qualified Data.Aeson as A
 import qualified Data.ByteString.Lazy as BL
 import Data.Foldable (traverse_)
 import Data.Maybe (fromMaybe)
-import Data.Time (UTCTime, getCurrentTime, addUTCTime, nominalDay)
-import qualified Data.Time.Format as TF
 import qualified Options.Applicative as O
 import qualified System.IO as IO
 import System.Exit (exitFailure)
@@ -64,19 +62,16 @@ parseArgs = O.info (parser <**> O.helper) (O.fullDesc <> O.header "willikins - y
 main :: IO ()
 main = Mem.withDatabase "willikins.sqlite" $ \db -> do
   credentials <- LLM.credentialsFromEnvironment
-  events <- Mem.getAllEvents db
-  facts <- Mem.getAllFacts db
-  now <- getCurrentTime
-  let sysPrompt = systemPrompt now events facts
-  let llm = LLM.defaultLLM credentials db
+  sysPrompt <- LLM.defaultSystemPrompt db
+  let llm = LLM.defaultLLM credentials db sysPrompt
   O.execParser parseArgs >>= \case
     Debug DDumpSystemPrompt -> putStrLn sysPrompt
-    Debug DDumpFacts -> traverse_ print facts
+    Debug DDumpFacts -> traverse_ print =<< Mem.getAllFacts db
     Debug DDumpChats -> traverse_ print =<< Mem.getAllChats db
     Sync SCalendar -> syncCalendar db
-    DailyBriefing RespondArgs{..} -> respond db rChatId sysPrompt (Just dailyBriefing) llm
-    Respond RespondArgs{..} -> respond db rChatId sysPrompt Nothing llm
-    Chatbot -> chatbot sysPrompt llm
+    DailyBriefing RespondArgs{..} -> respond db rChatId (Just dailyBriefing) llm
+    Respond RespondArgs{..} -> respond db rChatId Nothing llm
+    Chatbot -> chatbot llm
 
 syncCalendar :: Mem.Connection -> IO ()
 syncCalendar db = GCal.credentialsFromEnvironment >>= GCal.fetchEvents >>= \case
@@ -90,12 +85,12 @@ syncCalendar db = GCal.credentialsFromEnvironment >>= GCal.fetchEvents >>= \case
 -- | Reply to a single message provided on stdin, printing the result(s) to
 -- stdout in JSON format, and also appending to the conversation history in
 -- memory.
-respond :: Mem.Connection -> String -> String -> Maybe String -> LLM.LLM -> IO ()
-respond db chatId sysPrompt userPrompt llm = do
+respond :: Mem.Connection -> String -> Maybe String -> LLM.LLM -> IO ()
+respond db chatId userPrompt llm = do
     history0 <- Mem.getChatHistory db chatId 50
     prompt <- maybe getContents pure userPrompt
     let (history, humanMessage) = toHistory history0 prompt
-    LLM.oneshot llm sysPrompt history >>= \case
+    LLM.oneshot llm history >>= \case
       Right history' -> do
         Mem.insertChatMessages db chatId $ maybe id (:) humanMessage history'
         BL.putStr (A.encode history')
@@ -113,9 +108,9 @@ respond db chatId sysPrompt userPrompt llm = do
     -- continuance of an existing conversation, human turn
     toHistory hs prompt = let human = LLM.MessageText { mtRole = LLM.User, mtText = prompt } in (hs ++ [human], Just human)
 
-chatbot :: String -> LLM.LLM -> IO ()
-chatbot sysPrompt llm = go initialHistory where
-  go history = LLM.oneshot llm sysPrompt history >>= \case
+chatbot :: LLM.LLM -> IO ()
+chatbot llm = go initialHistory where
+  go history = LLM.oneshot llm history >>= \case
     Right history' -> do
       traverse_ (\m -> printMessage m >> putStrLn sep) history'
       query <- getQuery
@@ -141,41 +136,6 @@ getQuery = go [] where
     if l == "."
       then pure (unlines (reverse ls))
       else go (l:ls)
-
-systemPrompt :: UTCTime -> [Mem.Event] -> [Mem.Fact] -> String
-systemPrompt now events facts = unlines prompt where
-  prompt =
-    [ "You are Willikins, a dignified and highly professional butler."
-    , "You serve your master faithfully, to the best of your abilities and knowledge."
-    , "You can only perform digital tasks, and you are not able to perform any physical tasks, so don't offer."
-    , "Your abilities are limited to messaging your client to remind them of things; you can't access websites or other tools."
-    , ""
-    , "Begin with a polite greeting and introduction, then ask how you can be of service."
-    , ""
-    , "Your response style:"
-    , "- Use a brief, natural-sounding tone characteristic of a personal assistant"
-    , "- Be slightly dignified but sound modern, not too stuffy or old-fashioned"
-    , "- Keep responses brief (1-2 sentences)"
-    , "- Vary your responses to avoid sounding robotic"
-    , "- Be polite and deferential"
-    , "- Avoid contractions (use \"do not\" instead of \"don't\")"
-    , ""
-    , "You are aware of the following calendar entries:"
-    ] ++ map showEvent events ++
-    [ ""
-    , "The current date is " ++ today
-    , ""
-    , "Before responding to the user, use the create_memory tool to record any reminders or any other information that might be useful to reference later."
-    , "You do not need to commit the calendar entries to memory."
-    , ""
-    , "You have previously committed the following facts to memory:"
-    ] ++ map showFact facts
-
-  showEvent e = "- " ++ Mem.formatEventForLLM e
-
-  showFact f = "- " ++ Mem.formatFactForLLM f
-
-  today = TF.formatTime TF.defaultTimeLocale "%A, %Y-%m-%d" now
 
 dailyBriefing :: String
 dailyBriefing = unlines
