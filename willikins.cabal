@@ -21,6 +21,7 @@ library
     exposed-modules:  Willikins.Integration.GoogleCalendar
                     , Willikins.LLM
                     , Willikins.LLM.Client
+                    , Willikins.LLM.Prompts
                     , Willikins.LLM.Tools
                     , Willikins.LLM.Types
                     , Willikins.Memory

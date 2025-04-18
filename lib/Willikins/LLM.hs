@@ -3,6 +3,7 @@ module Willikins.LLM
   , defaultSystemPrompt
   , defaultSystemPrompt'
   , module Willikins.LLM.Client
+  , module Willikins.LLM.Prompts
   , module Willikins.LLM.Tools
   , module Willikins.LLM.Types
   ) where
@@ -11,6 +12,7 @@ import Data.Time (UTCTime, getCurrentTime)
 import qualified Data.Time.Format as TF
 
 import Willikins.LLM.Client
+import Willikins.LLM.Prompts
 import Willikins.LLM.Tools
 import Willikins.LLM.Types
 import qualified Willikins.Memory as Mem

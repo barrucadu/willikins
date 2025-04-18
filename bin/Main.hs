@@ -40,7 +40,7 @@ parseArgs = O.info (parser <**> O.helper) (O.fullDesc <> O.header "willikins - y
     ]
 
   pdebug = O.hsubparser . mconcat $
-    [ p "dump-system-prompt" (pure DumpSystemPrompt) "Print system prompt"
+    [ p "dump-system-priompt" (pure DumpSystemPrompt) "Print system prompt"
     , p "dump-facts" (pure DumpFacts) "Print all remembered facts"
     , p "dump-chats" (pure DumpChats) "Print all chat history"
     ]
@@ -64,7 +64,7 @@ main = Mem.withDatabase "willikins.sqlite" $ \db -> do
     DumpFacts -> traverse_ print =<< Mem.getAllFacts db
     DumpChats -> traverse_ print =<< Mem.getAllChats db
     SyncCalendar -> syncCalendar db
-    DailyBriefing RespondArgs{..} -> respond db rChatId (Just dailyBriefing) llm
+    DailyBriefing RespondArgs{..} -> respond db rChatId (Just LLM.dailyBriefing) llm
     Respond RespondArgs{..} -> respond db rChatId Nothing llm
     Chatbot -> chatbot llm
 
@@ -131,25 +131,6 @@ getQuery = go [] where
     if l == "."
       then pure (unlines (reverse ls))
       else go (l:ls)
-
-dailyBriefing :: String
-dailyBriefing = unlines
-  [ "It is your duty to provide a briefing summarising important information for the day."
-  , "The briefing should have the following sections:"
-  , ""
-  , "Begin with a formal greeting."
-  , ""
-  , "**Today**"
-  , ""
-  , "Note any reminders about today's affairs."
-  , ""
-  , "**Looking Ahead**"
-  , ""
-  , "Offer a brief overview of forthcoming appointments, engagements, and tasks for the remainder of the week."
-  , "Pay particular attention to tomorrow's schedule."
-  , "You do not need to mention when I will be working from home, but do mention if I will be working from the office, or not working at all (apart from weekends when it is expected to not work)"
-  , "If I am going to be on call, mention that a week in advance."
-  ]
 
 sep :: String
 sep = unlines
