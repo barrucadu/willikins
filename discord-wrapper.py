@@ -32,7 +32,7 @@ async def willikins_respond(chat_id, query):
     proc = await asyncio.create_subprocess_exec(
         "willikins",
         "respond",
-        chat_id,
+        f"--chat-id={chat_id}",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,

@@ -4,18 +4,60 @@
 
 module Main where
 
+import Control.Applicative ((<**>), optional)
 import qualified Data.Aeson as A
 import qualified Data.ByteString.Lazy as BL
 import Data.Foldable (traverse_)
+import Data.Maybe (fromMaybe)
 import Data.Time (UTCTime, getCurrentTime, addUTCTime, nominalDay)
 import qualified Data.Time.Format as TF
+import qualified Options.Applicative as O
 import qualified System.IO as IO
-import System.Environment (getArgs)
 import System.Exit (exitFailure)
 
 import qualified Willikins.Integration.GoogleCalendar as GCal
 import qualified Willikins.LLM as LLM
 import qualified Willikins.Memory as Mem
+
+data Args
+  = Debug DebugArgs
+  | Sync SyncArgs
+  | Respond RespondArgs
+  | Chatbot
+
+data DebugArgs
+  = DDumpSystemPrompt
+  | DDumpFacts
+  | DDumpChats
+
+data SyncArgs = SCalendar
+
+newtype RespondArgs = RespondArgs { rChatId :: String }
+
+parseArgs :: O.ParserInfo Args
+parseArgs = O.info (parser <**> O.helper) (O.fullDesc <> O.header "willikins - your AI butler") where
+  parser = fromMaybe Chatbot <$> optional parser'
+
+  parser' = O.hsubparser . mconcat $
+    [ p "debug" (Debug <$> pdebug) "Debugging tools"
+    , p "sync" (Sync <$> psync) "Pull data from external sources"
+    , p "respond" (Respond <$> prespond) "Simple one-shot communication"
+    ]
+
+  pdebug = O.hsubparser . mconcat $
+    [ p "dump-system-prompt" (pure DDumpSystemPrompt) "Print system prompt"
+    , p "dump-facts" (pure DDumpFacts) "Print all remembered facts"
+    , p "dump-chats" (pure DDumpChats) "Print all chat history"
+    ]
+
+  psync = O.hsubparser . mconcat $
+    [ p "calendar" (pure SCalendar) "Synchronise google calendar"
+    ]
+
+  prespond = RespondArgs
+    <$> O.strOption (O.long "chat-id" <> O.metavar "ID" <> O.help "Unique identifier of the conversation to associate this message and its response with")
+
+  p cmd next = O.command cmd . O.info next . O.progDesc
 
 main :: IO ()
 main = Mem.withDatabase "willikins.sqlite" $ \db -> do
@@ -25,14 +67,13 @@ main = Mem.withDatabase "willikins.sqlite" $ \db -> do
   now <- getCurrentTime
   let sysPrompt = systemPrompt now events facts
   let llm = LLM.defaultLLM credentials db
-  getArgs >>= \case
-    ["debug", "dump-system-prompt"] -> putStrLn sysPrompt
-    ["debug", "dump-facts"] -> traverse_ print facts
-    ["debug", "dump-chats"] -> traverse_ print =<< Mem.getAllChats db
-    ["sync", "calendar"] -> syncCalendar db
-    ["respond", chatId] -> respond db chatId sysPrompt llm
-    [] -> chatbot sysPrompt llm
-    x -> putStrLn ("Unknown command: " ++ show x) >> exitFailure
+  O.execParser parseArgs >>= \case
+    Debug DDumpSystemPrompt -> putStrLn sysPrompt
+    Debug DDumpFacts -> traverse_ print facts
+    Debug DDumpChats -> traverse_ print =<< Mem.getAllChats db
+    Sync SCalendar -> syncCalendar db
+    Respond RespondArgs{..} -> respond db rChatId sysPrompt llm
+    Chatbot -> chatbot sysPrompt llm
 
 syncCalendar :: Mem.Connection -> IO ()
 syncCalendar db = GCal.credentialsFromEnvironment >>= GCal.fetchEvents >>= \case
