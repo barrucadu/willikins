@@ -28,25 +28,53 @@ client = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(client)
 
 
-async def willikins_respond(chat_id, query):
+async def willikins(command, chat_id, query=None):
     proc = await asyncio.create_subprocess_exec(
         "willikins",
-        "respond",
+        command,
         f"--chat-id={chat_id}",
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
-    stdout, stderr = await proc.communicate(query.encode())
+    stdout, stderr = await proc.communicate(None if query is None else query.encode())
+
+    if proc.returncode != 0:
+        logging.warning(f"willikins error code {retcode}: {stderr}")
+
     return (proc.returncode, stdout.decode(), stderr.decode())
 
 
-async def send_debug_message(client, guild_id, message):
+async def send_debug_message(guild_id, message):
     channel_id = CONFIG["debug-channels"].get(str(guild_id))
     if channel_id:
         channel = client.get_partial_messageable(channel_id)
         if channel:
             await channel.send(message)
+
+
+async def send_willikins_response(guild_id, bot_messages, send_reply):
+    reply = None
+    for bot_message in bot_messages:
+        for bot_message_content in bot_message["content"]:
+            ty = bot_message_content["type"]
+            if ty == "tool_use":
+                await send_debug_message(
+                    guild_id,
+                    f"[tool use (id {bot_message_content['id']}) (name {bot_message_content['name']})]\n{bot_message_content['input']}",
+                )
+            elif ty == "tool_result":
+                await send_debug_message(
+                    guild_id,
+                    f"[tool result (id {bot_message_content['tool_use_id']}) (status {'error' if bot_message_content['is_error'] else 'ok'})]\n{bot_message_content['content']}",
+                )
+            elif ty == "text":
+                # sometimes if asked to use a tool, willikins will say he'll do
+                # it, then do it, then say it's been done - only forward the
+                # final message along to the channel
+                reply = bot_message_content["text"]
+    if reply:
+        await send_reply(reply)
 
 
 @tree.command(
@@ -64,39 +92,39 @@ async def set_debug_channel(interaction):
     await interaction.response.send_message("Certainly, sir.")
 
 
+@tree.command(
+    name="dailybriefing",
+    description="Generate the daily briefing",
+)
+async def daily_briefing(interaction):
+    # Initial response has to be sent within 3s
+    # https://discord.com/developers/docs/interactions/receiving-and-responding#interaction-callback
+    await interaction.response.defer(thinking=True)
+
+    chat_id = f"DISCORD-{interaction.channel_id}"
+    retcode, stdout, stderr = await willikins("daily-briefing", chat_id)
+    if retcode == 0:
+        await send_willikins_response(
+            interaction.guild.id, json.loads(stdout), interaction.followup.send
+        )
+    else:
+        await interaction.followup.send(
+            "My most humble apologies sir, I am unable to present my usual briefing."
+        )
+
+
 @client.event
 async def on_message(message):
     if message.author == client.user:
         return
 
     chat_id = f"DISCORD-{message.channel.id}"
-    retcode, stdout, stderr = await willikins_respond(chat_id, message.content)
+    retcode, stdout, stderr = await willikins("respond", chat_id, message.content)
     if retcode == 0:
-        reply = None
-        for bot_message in json.loads(stdout):
-            for bot_message_content in bot_message["content"]:
-                ty = bot_message_content["type"]
-                if ty == "tool_use":
-                    await send_debug_message(
-                        client,
-                        message.guild.id,
-                        f"[tool use (id {bot_message_content['id']}) (name {bot_message_content['name']})]\n{bot_message_content['input']}",
-                    )
-                elif ty == "tool_result":
-                    await send_debug_message(
-                        client,
-                        message.guild.id,
-                        f"[tool result (id {bot_message_content['tool_use_id']}) (status {'error' if bot_message_content['is_error'] else 'ok'})]\n{bot_message_content['content']}",
-                    )
-                elif ty == "text":
-                    # sometimes if asked to use a tool, willikins will say he'll
-                    # do it, then do it, then say it's been done - only forward
-                    # the final message along to the channel
-                    reply = bot_message_content["text"]
-        if reply:
-            await message.reply(reply)
+        await send_willikins_response(
+            message.guild.id, json.loads(stdout), message.reply
+        )
     else:
-        logging.warning(f"willikins error code {retcode}: {stderr}")
         await message.reply("My apologies, sir, I didn't quite catch that.")
 
 

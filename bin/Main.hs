@@ -23,6 +23,7 @@ data Args
   = Debug DebugArgs
   | Sync SyncArgs
   | Respond RespondArgs
+  | DailyBriefing RespondArgs
   | Chatbot
 
 data DebugArgs
@@ -42,6 +43,7 @@ parseArgs = O.info (parser <**> O.helper) (O.fullDesc <> O.header "willikins - y
     [ p "debug" (Debug <$> pdebug) "Debugging tools"
     , p "sync" (Sync <$> psync) "Pull data from external sources"
     , p "respond" (Respond <$> prespond) "Simple one-shot communication"
+    , p "daily-briefing" (DailyBriefing <$> prespond) "Generate the daily briefing"
     ]
 
   pdebug = O.hsubparser . mconcat $
@@ -55,7 +57,7 @@ parseArgs = O.info (parser <**> O.helper) (O.fullDesc <> O.header "willikins - y
     ]
 
   prespond = RespondArgs
-    <$> O.strOption (O.long "chat-id" <> O.metavar "ID" <> O.help "Unique identifier of the conversation to associate this message and its response with")
+    <$> O.strOption (O.long "chat-id" <> O.metavar "ID" <> O.help "Unique identifier of the conversation to associate this message with")
 
   p cmd next = O.command cmd . O.info next . O.progDesc
 
@@ -72,7 +74,8 @@ main = Mem.withDatabase "willikins.sqlite" $ \db -> do
     Debug DDumpFacts -> traverse_ print facts
     Debug DDumpChats -> traverse_ print =<< Mem.getAllChats db
     Sync SCalendar -> syncCalendar db
-    Respond RespondArgs{..} -> respond db rChatId sysPrompt llm
+    DailyBriefing RespondArgs{..} -> respond db rChatId sysPrompt (Just dailyBriefing) llm
+    Respond RespondArgs{..} -> respond db rChatId sysPrompt Nothing llm
     Chatbot -> chatbot sysPrompt llm
 
 syncCalendar :: Mem.Connection -> IO ()
@@ -87,10 +90,10 @@ syncCalendar db = GCal.credentialsFromEnvironment >>= GCal.fetchEvents >>= \case
 -- | Reply to a single message provided on stdin, printing the result(s) to
 -- stdout in JSON format, and also appending to the conversation history in
 -- memory.
-respond :: Mem.Connection -> String -> String -> LLM.LLM -> IO ()
-respond db chatId sysPrompt llm = do
+respond :: Mem.Connection -> String -> String -> Maybe String -> LLM.LLM -> IO ()
+respond db chatId sysPrompt userPrompt llm = do
     history0 <- Mem.getChatHistory db chatId 50
-    prompt <- getContents
+    prompt <- maybe getContents pure userPrompt
     let (history, humanMessage) = toHistory history0 prompt
     LLM.oneshot llm sysPrompt history >>= \case
       Right history' -> do
@@ -173,6 +176,25 @@ systemPrompt now events facts = unlines prompt where
   showFact f = "- " ++ Mem.formatFactForLLM f
 
   today = TF.formatTime TF.defaultTimeLocale "%A, %Y-%m-%d" now
+
+dailyBriefing :: String
+dailyBriefing = unlines
+  [ "It is your duty to provide a briefing summarising important information for the day."
+  , "The briefing should have the following sections:"
+  , ""
+  , "Begin with a formal greeting."
+  , ""
+  , "**Today**"
+  , ""
+  , "Note any reminders about today's affairs."
+  , ""
+  , "**Looking Ahead**"
+  , ""
+  , "Offer a brief overview of forthcoming appointments, engagements, and tasks for the remainder of the week."
+  , "Pay particular attention to tomorrow's schedule."
+  , "You do not need to mention when I will be working from home, but do mention if I will be working from the office, or not working at all (apart from weekends when it is expected to not work)"
+  , "If I am going to be on call, mention that a week in advance."
+  ]
 
 sep :: String
 sep = unlines
