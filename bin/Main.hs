@@ -17,41 +17,36 @@ import qualified Willikins.Integration.GoogleCalendar as GCal
 import qualified Willikins.LLM as LLM
 import qualified Willikins.Memory as Mem
 
-data Args
-  = Debug DebugArgs
-  | Sync SyncArgs
-  | Respond RespondArgs
+data Command
+  = DumpSystemPrompt
+  | DumpFacts
+  | DumpChats
+  | SyncCalendar
   | DailyBriefing RespondArgs
+  | Respond RespondArgs
   | Chatbot
-
-data DebugArgs
-  = DDumpSystemPrompt
-  | DDumpFacts
-  | DDumpChats
-
-data SyncArgs = SCalendar
 
 newtype RespondArgs = RespondArgs { rChatId :: String }
 
-parseArgs :: O.ParserInfo Args
+parseArgs :: O.ParserInfo Command
 parseArgs = O.info (parser <**> O.helper) (O.fullDesc <> O.header "willikins - your AI butler") where
   parser = fromMaybe Chatbot <$> optional parser'
 
   parser' = O.hsubparser . mconcat $
-    [ p "debug" (Debug <$> pdebug) "Debugging tools"
-    , p "sync" (Sync <$> psync) "Pull data from external sources"
+    [ p "debug" pdebug "Debugging tools"
+    , p "sync" psync "Pull data from external sources"
     , p "respond" (Respond <$> prespond) "Simple one-shot communication"
     , p "daily-briefing" (DailyBriefing <$> prespond) "Generate the daily briefing"
     ]
 
   pdebug = O.hsubparser . mconcat $
-    [ p "dump-system-prompt" (pure DDumpSystemPrompt) "Print system prompt"
-    , p "dump-facts" (pure DDumpFacts) "Print all remembered facts"
-    , p "dump-chats" (pure DDumpChats) "Print all chat history"
+    [ p "dump-system-prompt" (pure DumpSystemPrompt) "Print system prompt"
+    , p "dump-facts" (pure DumpFacts) "Print all remembered facts"
+    , p "dump-chats" (pure DumpChats) "Print all chat history"
     ]
 
   psync = O.hsubparser . mconcat $
-    [ p "calendar" (pure SCalendar) "Synchronise google calendar"
+    [ p "calendar" (pure SyncCalendar) "Synchronise google calendar"
     ]
 
   prespond = RespondArgs
@@ -65,10 +60,10 @@ main = Mem.withDatabase "willikins.sqlite" $ \db -> do
   sysPrompt <- LLM.defaultSystemPrompt db
   let llm = LLM.defaultLLM credentials db sysPrompt
   O.execParser parseArgs >>= \case
-    Debug DDumpSystemPrompt -> putStrLn sysPrompt
-    Debug DDumpFacts -> traverse_ print =<< Mem.getAllFacts db
-    Debug DDumpChats -> traverse_ print =<< Mem.getAllChats db
-    Sync SCalendar -> syncCalendar db
+    DumpSystemPrompt -> putStrLn sysPrompt
+    DumpFacts -> traverse_ print =<< Mem.getAllFacts db
+    DumpChats -> traverse_ print =<< Mem.getAllChats db
+    SyncCalendar -> syncCalendar db
     DailyBriefing RespondArgs{..} -> respond db rChatId (Just dailyBriefing) llm
     Respond RespondArgs{..} -> respond db rChatId Nothing llm
     Chatbot -> chatbot llm
