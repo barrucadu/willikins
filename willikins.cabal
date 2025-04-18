@@ -45,6 +45,7 @@ executable willikins
     -- other-extensions:
     build-depends:    base ^>=4.18.2.1
                     , aeson
+                    , bytestring
                     , time
                     , willikins
 

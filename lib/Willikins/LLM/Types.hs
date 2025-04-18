@@ -15,6 +15,7 @@ module Willikins.LLM.Types
 
 import Data.Aeson (ToJSON, FromJSON)
 import qualified Data.Aeson as A
+import Data.Char (toLower)
 import Data.Either (isLeft)
 import Data.String (fromString)
 import GHC.Generics (Generic)
@@ -38,7 +39,7 @@ data MessagesRequest = MessagesRequest
   deriving (Generic, Show)
 
 instance ToJSON MessagesRequest where
-  toEncoding = A.genericToEncoding A.defaultOptions { A.fieldLabelModifier = A.camelTo2 '_' }
+  toJSON = A.genericToJSON A.defaultOptions { A.fieldLabelModifier = A.camelTo2 '_' }
 
 -- | https://docs.anthropic.com/en/api/messages#body-messages
 data Message
@@ -90,13 +91,49 @@ instance ToJSON Message where
           ]
         ]
 
+-- only needs to be consistent with the ToJSON instance, not with the API
+-- response format in general
+instance FromJSON Message where
+  parseJSON = A.withObject "Message" $ \v -> do
+      role <- v A..: "role"
+      content <- v A..: "content"
+      case content of
+        [] -> pure $ MessageText { mtRole = role, mtText = "" }
+        [x] -> parseContent role x
+        xs -> inconsistency "message should only have one content block" (show xs)
+    where
+      parseContent role = A.withObject "Content" $ \v -> do
+        ty <- v A..: "type"
+        case ty :: String of
+          "text" -> parseText role v
+          "tool_use" -> parseToolUse v
+          "tool_result" -> parseToolResult v
+          _gg -> inconsistency "unknown type" ty
+
+      parseText role v = MessageText role <$> v A..: "text"
+
+      parseToolUse v = MessageToolUse <$> v A..: "id" <*> v A..: "name" <*> v A..: "input"
+
+      parseToolResult v = do
+        tuId <- v A..: "tool_use_id"
+        tuText <- v A..: "content"
+        tuErr <- v A..: "is_error"
+        pure $
+          if tuErr
+          then MessageToolResult { mtrId = tuId, mtrText = Left tuText }
+          else MessageToolResult { mtrId = tuId, mtrText = Right tuText }
+
+      inconsistency msg val = error $ "ToJSON / FromJSON inconsistency - " ++ msg ++ ": " ++ val
+
 -- | https://docs.anthropic.com/en/api/messages#body-messages-role
 data Role = User | Assistant
-  deriving Show
+  deriving (Generic, Show)
 
 instance ToJSON Role where
-  toJSON User = "user"
-  toJSON Assistant = "assistant"
+  toJSON = A.genericToJSON A.defaultOptions { A.constructorTagModifier = map toLower }
+
+instance FromJSON Role where
+  parseJSON = A.genericParseJSON A.defaultOptions { A.constructorTagModifier = map toLower }
 
 -- | https://docs.anthropic.com/en/api/messages#body-tools
 data Tool = Tool

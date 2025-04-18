@@ -5,10 +5,11 @@
 module Main where
 
 import qualified Data.Aeson as A
+import qualified Data.ByteString.Lazy as BL
 import Data.Foldable (traverse_)
 import Data.Time (UTCTime, getCurrentTime, addUTCTime, nominalDay)
 import qualified Data.Time.Format as TF
-import System.IO (getLine, putStrLn)
+import qualified System.IO as IO
 import System.Environment (getArgs)
 import System.Exit (exitFailure)
 
@@ -23,11 +24,15 @@ main = Mem.withDatabase "willikins.sqlite" $ \db -> do
   facts <- Mem.getAllFacts db
   now <- getCurrentTime
   let sysPrompt = systemPrompt now events facts
+  let llm = LLM.defaultLLM credentials db
   getArgs >>= \case
     ["debug", "dump-system-prompt"] -> putStrLn sysPrompt
     ["debug", "dump-facts"] -> traverse_ print facts
+    ["debug", "dump-chats"] -> traverse_ print =<< Mem.getAllChats db
     ["sync", "calendar"] -> syncCalendar db
-    _ -> chatbot sysPrompt $ LLM.defaultLLM credentials db
+    ["respond", chatId] -> respond db chatId sysPrompt llm
+    [] -> chatbot sysPrompt llm
+    x -> putStrLn ("Unknown command: " ++ show x) >> exitFailure
 
 syncCalendar :: Mem.Connection -> IO ()
 syncCalendar db = GCal.credentialsFromEnvironment >>= GCal.fetchEvents >>= \case
@@ -37,6 +42,32 @@ syncCalendar db = GCal.credentialsFromEnvironment >>= GCal.fetchEvents >>= \case
   Nothing -> do
     putStrLn "could not fetch events from Google Calendar"
     exitFailure
+
+-- | Reply to a single message provided on stdin, printing the result(s) to
+-- stdout in JSON format, and also appending to the conversation history in
+-- memory.
+respond :: Mem.Connection -> String -> String -> LLM.LLM -> IO ()
+respond db chatId sysPrompt llm = do
+    history0 <- Mem.getChatHistory db chatId 50
+    prompt <- getContents
+    let (history, humanMessage) = toHistory history0 prompt
+    LLM.oneshot llm sysPrompt history >>= \case
+      Right history' -> do
+        Mem.insertChatMessages db chatId $ maybe id (:) humanMessage history'
+        BL.putStr (A.encode history')
+        putStrLn ""
+      Left err -> do
+        IO.hPrint IO.stderr err
+        exitFailure
+  where
+    -- beginning of a new conversation, AI opening
+    toHistory [] "" = ([LLM.MessageText { mtRole = LLM.Assistant, mtText = "" }], Nothing)
+    -- continuance of an existing conversation, AI turn
+    toHistory hs "" = (hs, Nothing)
+    -- beginning of a new conversation, human opening
+    toHistory [] prompt = let human = LLM.MessageText { mtRole = LLM.User, mtText = prompt } in ([human], Just human)
+    -- continuance of an existing conversation, human turn
+    toHistory hs prompt = let human = LLM.MessageText { mtRole = LLM.User, mtText = prompt } in (hs ++ [human], Just human)
 
 chatbot :: String -> LLM.LLM -> IO ()
 chatbot sysPrompt llm = go initialHistory where

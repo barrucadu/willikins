@@ -45,6 +45,7 @@ data Error
   = ApiError { eType :: String, eMessage :: String }
   | InvalidApiResponseError String
   | NetworkError
+  deriving Show
 
 instance FromJSON Error where
   parseJSON = A.withObject "ApiError" $ \v -> do
