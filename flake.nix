@@ -13,10 +13,12 @@
 
       devShells.${system}.default = pkgs.mkShell {
         packages = with pkgs; [
+          black
           google-cloud-sdk
           haskellPackages.cabal-install
           haskellPackages.ghc
           haskellPackages.hlint
+          (python3.withPackages (ps: [ps.discordpy]))
         ];
         buildInputs = with pkgs; [
           zlib
