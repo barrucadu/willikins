@@ -19,14 +19,24 @@ import qualified Willikins.Memory as Mem
 main :: IO ()
 main = Mem.withDatabase "willikins.sqlite" $ \db -> do
   credentials <- LLM.credentialsFromEnvironment
-  events <- GCal.fetchEvents =<< GCal.credentialsFromEnvironment
+  events <- Mem.getAllEvents db
   facts <- Mem.getAllFacts db
   now <- getCurrentTime
-  let sysPrompt = systemPrompt events now facts
+  let sysPrompt = systemPrompt now events facts
   getArgs >>= \case
     ["debug", "dump-system-prompt"] -> putStrLn sysPrompt
     ["debug", "dump-facts"] -> traverse_ print facts
+    ["sync", "calendar"] -> syncCalendar db
     _ -> chatbot sysPrompt $ LLM.defaultLLM credentials db
+
+syncCalendar :: Mem.Connection -> IO ()
+syncCalendar db = GCal.credentialsFromEnvironment >>= GCal.fetchEvents >>= \case
+  Just events -> do
+    Mem.replaceAllEvents db $ map GCal.formatEventForLLM events
+    putStrLn $ "loaded " ++ show (length events) ++ " events from Google Calendar"
+  Nothing -> do
+    putStrLn "could not fetch events from Google Calendar"
+    exitFailure
 
 chatbot :: String -> LLM.LLM -> IO ()
 chatbot sysPrompt llm = go initialHistory where
@@ -57,8 +67,8 @@ getQuery = go [] where
       then pure (unlines (reverse ls))
       else go (l:ls)
 
-systemPrompt :: Maybe [GCal.Event] -> UTCTime -> [Mem.Fact] -> String
-systemPrompt events now facts = unlines prompt where
+systemPrompt :: UTCTime -> [Mem.Event] -> [Mem.Fact] -> String
+systemPrompt now events facts = unlines prompt where
   prompt =
     [ "You are Willikins, a dignified and highly professional butler."
     , "You serve your master faithfully, to the best of your abilities and knowledge."
@@ -76,8 +86,7 @@ systemPrompt events now facts = unlines prompt where
     , "- Avoid contractions (use \"do not\" instead of \"don't\")"
     , ""
     , "You are aware of the following calendar entries:"
-    , ""
-    ] ++ maybe ["Error: could not retrieve calendar entries"] (map showEvent) events ++
+    ] ++ map showEvent events ++
     [ ""
     , "The current date is " ++ today
     , ""
@@ -87,7 +96,7 @@ systemPrompt events now facts = unlines prompt where
     , "You have previously committed the following facts to memory:"
     ] ++ map showFact facts
 
-  showEvent e = "- " ++ GCal.formatEventForLLM e
+  showEvent e = "- " ++ Mem.formatEventForLLM e
 
   showFact f = "- " ++ Mem.formatFactForLLM f
 

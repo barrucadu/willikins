@@ -10,6 +10,11 @@ module Willikins.Memory
   , insertFact
   , getAllFacts
   , deleteFact
+  -- * Calendar events
+  , Event(..)
+  , formatEventForLLM
+  , getAllEvents
+  , replaceAllEvents
   )
 where
 
@@ -22,8 +27,9 @@ withDatabase dbname action = withConnection dbname $ \conn -> do
   action conn
 
 initialiseDatabase :: Connection -> IO ()
-initialiseDatabase conn =
+initialiseDatabase conn = do
   execute_ conn "CREATE TABLE IF NOT EXISTS facts (id INTEGER PRIMARY KEY NOT NULL, text TEXT NOT NULL, date TEXT, created_at TEXT NOT NULL, deleted_at TEXT)"
+  execute_ conn "CREATE TABLE IF NOT EXISTS events (id INTEGER PRIMARY KEY NOT NULL, text TEXT NOT NULL, created_at TEXT NOT NULL)"
 
 ----------------------------------------------------------------------
 
@@ -64,3 +70,31 @@ deleteFact :: Connection -> Int -> IO ()
 deleteFact conn fId = do
   now <- getCurrentTime
   execute conn "UPDATE FACTS SET deleted_at = ? WHERE id = ?" (now, fId)
+
+-------------------------------------------------------------------------------
+
+-- | An event from the master's calendar.
+data Event = Event
+  { eId :: Int
+  , eText :: String
+  , eCreatedAt :: UTCTime
+  }
+  deriving Show
+
+instance FromRow Event where
+  fromRow = Event <$> field <*> field <*> field
+
+-- | '{text}'
+formatEventForLLM :: Event -> String
+formatEventForLLM = eText
+
+-- | Get all events
+getAllEvents :: Connection -> IO [Event]
+getAllEvents conn = query_ conn "SELECT * FROM events"
+
+-- | Transactionally replace the events in the database.
+replaceAllEvents :: Connection -> [String] -> IO ()
+replaceAllEvents conn events = withTransaction conn $ do
+  now <- getCurrentTime
+  execute_ conn "DELETE FROM events"
+  executeMany conn "INSERT INTO events (text, created_at) VALUES (?,?)" [(e, now) | e <- events]
