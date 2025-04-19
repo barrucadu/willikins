@@ -28,21 +28,26 @@ client = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(client)
 
 
-async def willikins(command, chat_id, query=None):
+async def willikins(command, chat_id=None, query=None):
+    args = ["willikins", command]
+    if chat_id is not None:
+        args.append(f"--chat-id={chat_id}")
+
     proc = await asyncio.create_subprocess_exec(
-        "willikins",
-        command,
-        f"--chat-id={chat_id}",
+        *args,
         stdin=asyncio.subprocess.PIPE,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
     stdout, stderr = await proc.communicate(None if query is None else query.encode())
+    stdout = stdout.decode()
+    stderr = stderr.decode()
+    retcode = proc.returncode
 
-    if proc.returncode != 0:
+    if retcode != 0:
         logging.warning(f"willikins error code {retcode}: {stderr}")
 
-    return (proc.returncode, stdout.decode(), stderr.decode())
+    return (retcode, stdout, stderr)
 
 
 async def send_debug_message(guild_id, message):
@@ -110,6 +115,25 @@ async def daily_briefing(interaction):
     else:
         await interaction.followup.send(
             "My most humble apologies sir, I am unable to present my usual briefing."
+        )
+
+
+@tree.command(
+    name="randomfeedentry",
+    description="Get a random unread feed entry, if there is one",
+)
+async def random_feed_entry(interaction):
+    await interaction.response.defer(thinking=True)
+
+    chat_id = f"DISCORD-{interaction.channel_id}"
+    retcode, stdout, stderr = await willikins("random-feed-entry")
+    if retcode == 0:
+        if stdout == "":
+            stdout = "You have read all of your articles, sir."
+        await interaction.followup.send(stdout)
+    else:
+        await interaction.followup.send(
+            "My most humble apologies sir, I am unable to consult your feeds at the moment."
         )
 
 

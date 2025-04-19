@@ -19,3 +19,15 @@ dailyBriefing = unlines
   , "You do not need to mention when I will be working from home, but do mention if I will be working from the office, or not working at all (apart from weekends when it is expected to not work)"
   , "If I am going to be on call, mention that a week in advance."
   ]
+
+-- | Summarise an article.
+summariseArticle :: String -> String
+summariseArticle text = unlines
+  [ "Give a short summary of the following article, a single paragraph pf 4 or 5 sentences at most."
+  , "Do not include any preamble or suffix, just the summary paragraph and nothing else."
+  , "If the article has any HTML or XML tags in don't mention them in your summary."
+  , "If the article is incomplete, don't mention that, just summarise what's there."
+  , ""
+  , "Here's the content of the article:"
+  , ""
+  ] ++ text

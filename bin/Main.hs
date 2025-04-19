@@ -13,6 +13,7 @@ import qualified Options.Applicative as O
 import qualified System.IO as IO
 import System.Exit (exitFailure)
 
+import qualified Willikins.Integration.Feed as Feed
 import qualified Willikins.Integration.GoogleCalendar as GCal
 import qualified Willikins.LLM as LLM
 import qualified Willikins.Memory as Mem
@@ -20,10 +21,13 @@ import qualified Willikins.Memory as Mem
 data Command
   = DumpSystemPrompt
   | DumpFacts
+  | DumpFeeds
   | DumpChats
   | SyncCalendar
+  | SyncFeeds
   | DailyBriefing RespondArgs
   | Respond RespondArgs
+  | RandomFeedEntry
   | Chatbot
 
 newtype RespondArgs = RespondArgs { rChatId :: String }
@@ -37,16 +41,19 @@ parseArgs = O.info (parser <**> O.helper) (O.fullDesc <> O.header "willikins - y
     , p "sync" psync "Pull data from external sources"
     , p "respond" (Respond <$> prespond) "Simple one-shot communication"
     , p "daily-briefing" (DailyBriefing <$> prespond) "Generate the daily briefing"
+    , p "random-feed-entry" (pure RandomFeedEntry) "Summarise a random unread feed entry and mark it as read"
     ]
 
   pdebug = O.hsubparser . mconcat $
-    [ p "dump-system-priompt" (pure DumpSystemPrompt) "Print system prompt"
+    [ p "dump-system-prompt" (pure DumpSystemPrompt) "Print system prompt"
     , p "dump-facts" (pure DumpFacts) "Print all remembered facts"
+    , p "dump-feeds" (pure DumpFeeds) "Print all RSS / Atom feeds"
     , p "dump-chats" (pure DumpChats) "Print all chat history"
     ]
 
   psync = O.hsubparser . mconcat $
     [ p "calendar" (pure SyncCalendar) "Synchronise google calendar"
+    , p "feeds" (pure SyncFeeds) "Synchronse RSS / Atom feeds"
     ]
 
   prespond = RespondArgs
@@ -62,10 +69,13 @@ main = Mem.withDatabase "willikins.sqlite" $ \db -> do
   O.execParser parseArgs >>= \case
     DumpSystemPrompt -> putStrLn sysPrompt
     DumpFacts -> traverse_ print =<< Mem.getAllFacts db
+    DumpFeeds -> traverse_ print =<< Mem.getAllFeeds db
     DumpChats -> traverse_ print =<< Mem.getAllChats db
     SyncCalendar -> syncCalendar db
+    SyncFeeds -> syncFeeds db
     DailyBriefing RespondArgs{..} -> respond db rChatId (Just LLM.dailyBriefing) llm
     Respond RespondArgs{..} -> respond db rChatId Nothing llm
+    RandomFeedEntry -> randomFeedEntry db llm
     Chatbot -> chatbot llm
 
 syncCalendar :: Mem.Connection -> IO ()
@@ -76,6 +86,14 @@ syncCalendar db = GCal.credentialsFromEnvironment >>= GCal.fetchEvents >>= \case
   Nothing -> do
     putStrLn "could not fetch events from Google Calendar"
     exitFailure
+
+syncFeeds :: Mem.Connection -> IO ()
+syncFeeds db = Mem.getAllFeeds db >>= traverse_ go where
+  go Mem.Feed{..} = Feed.fetchFeedEntries (Feed.FeedURL feURL) >>= \case
+    Just entries -> do
+      count <- Mem.insertFeedEntries db entries
+      putStrLn $ "inserted " ++ show count ++ " entries for " ++ feURL
+    Nothing -> putStrLn $ "could not fetch " ++ feURL
 
 -- | Reply to a single message provided on stdin, printing the result(s) to
 -- stdout in JSON format, and also appending to the conversation history in
@@ -102,6 +120,20 @@ respond db chatId userPrompt llm = do
     toHistory [] prompt = let human = LLM.MessageText { mtRole = LLM.User, mtText = prompt } in ([human], Just human)
     -- continuance of an existing conversation, human turn
     toHistory hs prompt = let human = LLM.MessageText { mtRole = LLM.User, mtText = prompt } in (hs ++ [human], Just human)
+
+-- | Select a random feed entry, print a summary to stdout, and mark it as read.
+randomFeedEntry :: Mem.Connection -> LLM.LLM -> IO ()
+randomFeedEntry db llm = Mem.getRandomUnreadFeedEntry db >>= maybe (pure ()) go where
+  go Mem.FeedEntry{..} = LLM.oneshot llm' (history fenText) >>= \case
+    Right [LLM.MessageText{..}] -> do
+      putStrLn $ "**[" ++ fenTitle ++ "](" ++ fenURL ++ ")**"
+      putStrLn ""
+      putStrLn mtText
+      Mem.markFeedEntryAsRead db fenId
+    _ -> exitFailure
+
+  history txt = [LLM.MessageText { mtRole = LLM.User, mtText = LLM.summariseArticle txt }]
+  llm' = llm { LLM.llmSystemPrompt = LLM.minimalSystemPrompt, LLM.llmTools = [] }
 
 chatbot :: LLM.LLM -> IO ()
 chatbot llm = go initialHistory where

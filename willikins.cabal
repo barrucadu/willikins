@@ -18,7 +18,8 @@ common warnings
 
 library
     import:           warnings
-    exposed-modules:  Willikins.Integration.GoogleCalendar
+    exposed-modules:  Willikins.Integration.Feed
+                    , Willikins.Integration.GoogleCalendar
                     , Willikins.LLM
                     , Willikins.LLM.Client
                     , Willikins.LLM.Prompts
@@ -31,10 +32,12 @@ library
     build-depends:    base ^>=4.18.2.1
                     , aeson
                     , bytestring
+                    , feed
                     , http-conduit
                     , process
                     , safe-exceptions
                     , sqlite-simple
+                    , text
                     , time
     hs-source-dirs:   lib
     default-language: Haskell2010
