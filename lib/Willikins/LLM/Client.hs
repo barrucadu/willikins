@@ -86,7 +86,11 @@ oneshot LLM{..} history0 = go [] where
       | tName t == name = f input
       | otherwise = handleTool' ts
 
-  req history = defaultReq { messages = history }
+  -- API returns an error if the first message in the history is a tool result
+  req history = defaultReq { messages = dropWhile isToolResult history }
+
+  isToolResult MessageToolResult{} = True
+  isToolResult _ = False
 
   defaultReq = MessagesRequest
     { maxTokens = llmMaxTokens
