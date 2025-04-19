@@ -1,9 +1,20 @@
 import asyncio
+import datetime
 import discord
-import logging
+import discord.ext.tasks
 import json
+import logging
 import os
+import zoneinfo
 
+
+TIMEZONE = zoneinfo.ZoneInfo("Europe/London")
+
+DAILY_BRIEFING_TIME = datetime.time(
+    hour=8,
+    minute=30,
+    tzinfo=TIMEZONE,
+)
 
 CONFIG_FILE_PATH = os.getenv("DISCORD_CONFIG_FILE", "willikins-discord.json")
 
@@ -20,12 +31,17 @@ def write_config():
 
 
 CONFIG.setdefault("debug-channels", {})
+CONFIG.setdefault("daily-briefings", {})
 write_config()
 
 intents = discord.Intents.default()
 intents.message_content = True
 client = discord.Client(intents=intents)
 tree = discord.app_commands.CommandTree(client)
+
+
+###############################################################################
+## llm
 
 
 async def willikins(command, chat_id=None, query=None):
@@ -97,6 +113,53 @@ async def set_debug_channel(interaction):
     await interaction.response.send_message("Certainly, sir.")
 
 
+###############################################################################
+## daily briefing
+
+
+def should_send_daily_briefing(guild_id):
+    last_sent_at = CONFIG["daily-briefings"][guild_id].get("last_sent_at_date")
+    sent_today = last_sent_at == datetime.date.today().isoformat()
+    due = datetime.datetime.now(tz=TIMEZONE).time() >= DAILY_BRIEFING_TIME
+    return not sent_today and due
+
+
+def mark_daily_briefing_as_sent(guild_id):
+    if guild_id in CONFIG["daily-briefings"]:
+        CONFIG["daily-briefings"][guild_id][
+            "last_sent_at_date"
+        ] = datetime.date.today().isoformat()
+        write_config()
+
+
+async def send_daily_briefing(guild_id, channel_id, send_message):
+    chat_id = f"DISCORD-{channel_id}"
+    retcode, stdout, stderr = await willikins("daily-briefing", chat_id)
+    if retcode == 0:
+        await send_willikins_response(guild_id, json.loads(stdout), send_message)
+        mark_daily_briefing_as_sent(guild_id)
+    else:
+        await send_message(
+            "My most humble apologies sir, I am unable to present my usual briefing."
+        )
+
+
+@tree.command(
+    name="setdailybriefing",
+    description="Set this channel as the one where the daily briefing goes",
+)
+async def set_daily_briefing_channel(interaction):
+    guild_id = interaction.guild.id
+    channel_id = interaction.channel_id
+    logging.info(f"set daily briefing channel for {guild_id} to {channel_id}")
+
+    CONFIG["daily-briefings"].setdefault(str(guild_id), {})
+    CONFIG["daily-briefings"][str(guild_id)]["channel"] = str(channel_id)
+    write_config()
+
+    await interaction.response.send_message("Certainly, sir.")
+
+
 @tree.command(
     name="dailybriefing",
     description="Generate the daily briefing",
@@ -106,16 +169,35 @@ async def daily_briefing(interaction):
     # https://discord.com/developers/docs/interactions/receiving-and-responding#interaction-callback
     await interaction.response.defer(thinking=True)
 
-    chat_id = f"DISCORD-{interaction.channel_id}"
-    retcode, stdout, stderr = await willikins("daily-briefing", chat_id)
-    if retcode == 0:
-        await send_willikins_response(
-            interaction.guild.id, json.loads(stdout), interaction.followup.send
-        )
-    else:
-        await interaction.followup.send(
-            "My most humble apologies sir, I am unable to present my usual briefing."
-        )
+    await send_daily_briefing(
+        str(interaction.guild.id),
+        str(interaction.channel_id),
+        interaction.followup.send,
+    )
+
+
+# every *:[00, 15, 45], check if we've sent today's daily briefing, and send it
+# if not.
+EVERY_15TH_MINUTE = [
+    datetime.time(hour=hour, minute=minute)
+    for hour in range(0, 24)
+    for minute in [0, 15, 30, 45]
+]
+
+
+@discord.ext.tasks.loop(time=EVERY_15TH_MINUTE)
+async def task_daily_briefing():
+    for guild_id, state in CONFIG["daily-briefings"].items():
+        if should_send_daily_briefing(guild_id):
+            await send_daily_briefing(
+                guild_id,
+                state["channel"],
+                client.get_partial_messageable(state["channel"]).send,
+            )
+
+
+###############################################################################
+## feeds
 
 
 @tree.command(
@@ -137,6 +219,10 @@ async def random_feed_entry(interaction):
         )
 
 
+###############################################################################
+## events
+
+
 @client.event
 async def on_message(message):
     if message.author == client.user:
@@ -154,6 +240,7 @@ async def on_message(message):
 
 @client.event
 async def on_ready():
+    task_daily_briefing.start()
     await tree.sync()
 
 
