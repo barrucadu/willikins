@@ -44,8 +44,9 @@ tree = discord.app_commands.CommandTree(client)
 ## llm
 
 
-async def willikins(command, chat_id=None, query=None):
-    args = ["willikins", command]
+async def willikins(*command, chat_id=None, query=None):
+    args = ["willikins"]
+    args.extend(command)
     if chat_id is not None:
         args.append(f"--chat-id={chat_id}")
 
@@ -134,7 +135,7 @@ def mark_daily_briefing_as_sent(guild_id):
 
 async def send_daily_briefing(guild_id, channel_id, send_message):
     chat_id = f"DISCORD-{channel_id}"
-    retcode, stdout, stderr = await willikins("daily-briefing", chat_id)
+    retcode, stdout, stderr = await willikins("daily-briefing", chat_id=chat_id)
     if retcode == 0:
         await send_willikins_response(guild_id, json.loads(stdout), send_message)
         mark_daily_briefing_as_sent(guild_id)
@@ -220,6 +221,19 @@ async def random_feed_entry(interaction):
 
 
 ###############################################################################
+## miscellaneous tasks
+
+# every [00, 03, 06, 12, 15, 18]:00, sync the external data sources.
+EVERY_3RD_HOUR = [datetime.time(hour=hour, minute=0) for hour in [0, 3, 6, 12, 15, 18]]
+
+
+@discord.ext.tasks.loop(time=EVERY_3RD_HOUR)
+async def task_sync():
+    await willikins("sync", "calendar")
+    await willikins("sync", "feeds")
+
+
+###############################################################################
 ## events
 
 
@@ -229,7 +243,7 @@ async def on_message(message):
         return
 
     chat_id = f"DISCORD-{message.channel.id}"
-    retcode, stdout, stderr = await willikins("respond", chat_id, message.content)
+    retcode, stdout, stderr = await willikins("respond", chat_id=chat_id, query=message.content)
     if retcode == 0:
         await send_willikins_response(
             message.guild.id, json.loads(stdout), message.reply
@@ -241,6 +255,7 @@ async def on_message(message):
 @client.event
 async def on_ready():
     task_daily_briefing.start()
+    task_sync.start()
     await tree.sync()
 
 
