@@ -11,7 +11,7 @@ import zoneinfo
 TIMEZONE = zoneinfo.ZoneInfo("Europe/London")
 
 DAILY_BRIEFING_TIME = datetime.time(
-    hour=8,
+    hour=7,
     minute=30,
     tzinfo=TIMEZONE,
 )

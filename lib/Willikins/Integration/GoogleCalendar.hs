@@ -94,7 +94,7 @@ fetchEvents credentials = do
     timeMax now = fmt $ addUTCTime (nominalDay * 14) now
     fmt = fromString . TF.formatTime TF.defaultTimeLocale "%FT00:00:00Z"
 
-    isBoring e = eTitle e `elem` ["Sleep!", "/tea/ is open"]
+    isBoring e = eTitle e `elem` ["Bedtime", "Sleep!", "/tea/ is open"]
 
 formatEventForLLM :: Event -> String
 formatEventForLLM Event{..} = eTitle ++ " " ++ timespec ++ locationspec where
